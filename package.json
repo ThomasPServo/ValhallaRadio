@@ -1,0 +1,21 @@
+{
+  "name": "valhalla-radio",
+  "version": "0.1.0",
+  "description": "AI-era web radio automation: monochrome.st music sourcing, Claude music direction & scheduling, realistic AI DJ, imaging, commercials and streaming.",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "dev": "node --env-file-if-exists=.env --watch server/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22.9"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.131.0",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}

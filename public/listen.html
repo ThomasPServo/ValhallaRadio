@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Listen Live</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>" />
+  <style>
+    :root { --bg: #0b0d12; --panel: #141821; --text: #eef0f5; --muted: #8b93a7; --accent: #f5a524; color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: radial-gradient(circle at 30% 0%, #1d2233, var(--bg) 60%); color: var(--text); font: 15px/1.5 Inter, system-ui, sans-serif; display: grid; place-items: center; padding: 16px; }
+    .player { width: 100%; max-width: 420px; background: var(--panel); border: 1px solid #262b38; border-radius: 18px; padding: 22px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,.4); }
+    .station { font-weight: 800; font-size: 20px; }
+    .slogan { color: var(--muted); font-size: 13px; }
+    .art { width: 100%; aspect-ratio: 1; border-radius: 14px; margin: 18px 0; background: #1d2230 center/cover; display: grid; place-items: center; font-size: 72px; }
+    .title { font-size: 19px; font-weight: 700; }
+    .artist { color: var(--muted); }
+    button { margin-top: 18px; width: 72px; height: 72px; border-radius: 50%; border: 0; background: var(--accent); color: #111; font-size: 28px; cursor: pointer; }
+    .live { display: inline-block; margin-top: 8px; font-size: 11px; font-weight: 700; letter-spacing: .1em; color: #fca5a5; }
+    .recent { margin-top: 20px; text-align: left; font-size: 13px; color: var(--muted); }
+    .recent div { padding: 4px 0; border-top: 1px solid #222736; }
+    input[type=range] { width: 60%; margin-top: 14px; accent-color: var(--accent); }
+  </style>
+</head>
+<body>
+  <div class="player">
+    <div class="station" id="station">Radio</div>
+    <div class="slogan" id="slogan"></div>
+    <div class="art" id="art">📻</div>
+    <div class="title" id="title">—</div>
+    <div class="artist" id="artist"></div>
+    <div class="live" id="live"></div>
+    <div><button id="play" aria-label="Play">▶</button></div>
+    <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9" aria-label="Volume" />
+    <div class="recent" id="recent"></div>
+  </div>
+  <audio id="audio" preload="none"></audio>
+  <script>
+    const audio = document.getElementById('audio');
+    const btn = document.getElementById('play');
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    btn.onclick = () => {
+      if (audio.paused) { audio.src = '/stream.mp3?t=' + Date.now(); audio.play(); btn.textContent = '■'; }
+      else { audio.pause(); audio.removeAttribute('src'); audio.load(); btn.textContent = '▶'; }
+    };
+    document.getElementById('vol').oninput = (e) => { audio.volume = Number(e.target.value); };
+    async function refresh() {
+      try {
+        const r = await (await fetch('/api/nowplaying')).json();
+        document.title = `${r.station.name} — Listen Live`;
+        document.getElementById('station').textContent = `${r.station.name} ${r.station.frequency}`;
+        document.getElementById('slogan').textContent = r.station.slogan;
+        document.getElementById('live').textContent = r.onAir ? '● LIVE' : 'OFF AIR';
+        const n = r.now;
+        document.getElementById('title').textContent = n?.type === 'music' ? n.title : r.station.name;
+        document.getElementById('artist').textContent = n?.type === 'music' ? n.artist : r.station.slogan;
+        const art = document.getElementById('art');
+        if (n?.type === 'music' && n.artwork) { art.style.backgroundImage = `url("${n.artwork}")`; art.textContent = ''; }
+        else if (!art.style.backgroundImage) art.textContent = '📻';
+        if ('mediaSession' in navigator && n) navigator.mediaSession.metadata = new MediaMetadata({ title: n.title || r.station.name, artist: n.artist || '', artwork: n.artwork ? [{ src: n.artwork }] : [] });
+        document.getElementById('recent').innerHTML = r.recent.length ? '<b>Recently played</b>' + r.recent.slice(1, 6).map((t) => `<div>${esc(t.artist)} — ${esc(t.title)}</div>`).join('') : '';
+      } catch { /* retry next tick */ }
+    }
+    refresh();
+    setInterval(refresh, 10000);
+  </script>
+</body>
+</html>

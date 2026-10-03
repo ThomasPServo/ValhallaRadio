@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Valhalla Radio Studio</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📻</text></svg>" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="app">
+    <nav class="side" id="nav">
+      <div class="brand">
+        <div class="logo">V</div>
+        <div><b id="brandName">Valhalla Radio</b><small id="brandSub">Studio</small></div>
+      </div>
+      <a href="#onair" data-view="onair">🎙️ On Air</a>
+      <a href="#log" data-view="log">📋 Program Log</a>
+      <a href="#library" data-view="library">🎵 Music Library</a>
+      <a href="#clocks" data-view="clocks">🕐 Clocks &amp; Grid</a>
+      <a href="#programming" data-view="programming">🧑‍🎤 Dayparts &amp; DJs</a>
+      <a href="#imaging" data-view="imaging">✨ Imaging &amp; Carts</a>
+      <a href="#commercials" data-view="commercials">💵 Commercials</a>
+      <a href="#market" data-view="market">📍 Station &amp; Market</a>
+      <a href="#streaming" data-view="streaming">📡 Streaming</a>
+      <a href="#ai" data-view="ai">🤖 AI Programmer</a>
+      <a href="#settings" data-view="settings">⚙️ Settings</a>
+      <div class="onair-pill" id="onairPill">OFF AIR</div>
+    </nav>
+    <main id="view"></main>
+  </div>
+  <div class="toast" id="toast"></div>
+  <audio id="monitor" preload="none"></audio>
+  <audio id="preview" preload="none"></audio>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
