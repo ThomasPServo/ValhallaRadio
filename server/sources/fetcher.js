@@ -16,7 +16,9 @@ import fsp from 'node:fs/promises';
 import { EventEmitter, once } from 'node:events';
 import { store } from '../store.js';
 
-export const CHUNK = 256 * 1024;
+// The origin relays files in 128 KB blocks at ~9-20 KB/s per connection and resets each connection at ~30 s:
+// a one-block request finishes well inside that, where a two-block one is often cut at the end.
+export const CHUNK = Math.max(16, Number(process.env.VALHALLA_FETCH_CHUNK_KB) || 128) * 1024;
 export const BACKGROUND = 5000; // priorities from here up are cache warming: never dropped, always last
 const UA = 'ValhallaRadio/0.2 (+radio automation)';
 const STALL_MS = 6 * 60_000; // no progress at all for this long: give up on the song
@@ -100,9 +102,13 @@ export class TrackFetch extends EventEmitter {
   restore() {
     try {
       const m = JSON.parse(fs.readFileSync(this.metaFile, 'utf8'));
-      if (m.total && m.chunk === CHUNK && fs.existsSync(this.part) && fs.statSync(this.part).size === m.total) {
-        this.total = m.total;
-        this.chunks = m.got.map((got, i) => ({ start: i * CHUNK, end: Math.min(m.total, (i + 1) * CHUNK) - 1, got, busy: false }));
+      if (m.total && m.chunk > 0 && fs.existsSync(this.part) && fs.statSync(this.part).size === m.total) {
+        this.initChunks(m.total);
+        // progress saved with any chunk size: each saved chunk is a filled prefix [start, start + got)
+        for (const [i, got] of m.got.entries()) {
+          const start = i * m.chunk; const filled = start + got;
+          for (const c of this.chunks) if (c.start >= start && c.start < filled) c.got = Math.min(c.end - c.start + 1, filled - c.start);
+        }
       }
     } catch { /* fresh start */ }
   }

@@ -96,3 +96,16 @@ test('the song needed soonest gets the connections first', async () => {
   assert.ok(late.received() < SIZE, 'the later song was still waiting when the urgent one finished');
   await late.done;
 });
+
+test('progress saved with the old 256 KB chunks carries over to the current chunk size', async () => {
+  origin.cut = 40_000; origin.failEvery = 7;
+  const target = path.join(dir, 'c.audio');
+  const part = Buffer.alloc(SIZE);
+  file.copy(part, 0, 0, 2 * CHUNK + 1000);
+  fs.writeFileSync(`${target}.part`, part);
+  fs.writeFileSync(`${target}.part.json`, JSON.stringify({ total: SIZE, chunk: 2 * CHUNK, got: [2 * CHUNK, 1000] }));
+  const f = getFetch('c', `${base}/track/c`, target);
+  assert.equal(f.contiguous(), 2 * CHUNK + 1000, 'old progress understood');
+  await f.done;
+  assert.ok(fs.readFileSync(target).equals(file));
+});
