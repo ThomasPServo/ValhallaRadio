@@ -13,6 +13,7 @@ import { store } from '../store.js';
 import * as mono from '../sources/monochrome.js';
 import { setPriority, dropFetches, fetcherStatus } from '../sources/fetcher.js';
 import { ensurePeaks, readPeaks } from '../audio/peakFile.js';
+import { queueAnalysis, analysisEvents } from '../audio/trackAnalyzer.js';
 import * as library from '../scheduler/library.js';
 import { KIND, estDuration } from '../scheduler/logs.js';
 import { loadAudio } from './audio.js';
@@ -40,6 +41,7 @@ const dbToLin = (db) => Math.pow(10, db / 20);
 export class Playout extends EventEmitter {
   constructor(scheduler, streamer) {
     super();
+    analysisEvents.on('analyzed', (id, a) => { try { this.applyAnalysis(id, a); } catch (err) { log('analysis update failed:', err.message); } });
     this.scheduler = scheduler;
     this.streamer = streamer;
     this.running = false;
@@ -490,13 +492,34 @@ export class Playout extends EventEmitter {
     let n = 0;
     for (const it of songs) {
       if (n >= ahead) break;
-      if (mono.isCached(it.trackId)) continue;
+      if (mono.isCached(it.trackId)) { queueAnalysis(it.trackId); continue; } // ending and fade point known before air
       n++;
       keep.add(String(it.trackId));
       const f = mono.fetchTrack(it.trackId, { priority: this.preparing.has(it.id) ? 0 : n });
       if (f && !this.preparing.has(it.id)) setPriority(String(it.trackId), n);
     }
     dropFetches(keep);
+  }
+
+  /** A song's background analysis finished: prepared or playing copies learn its real ending and fade point. */
+  applyAnalysis(trackId, a) {
+    const track = library.findTrack(trackId);
+    const manual = track?.markers || {};
+    for (const it of this.scheduler.allItems()) {
+      if (it.trackId !== trackId || !it.prep?.markers) continue;
+      const m = it.prep.markers;
+      Object.assign(m, {
+        endSec: a.endSec, endType: manual.endType || a.endType, mixOut: manual.mixOut ?? a.mixOut,
+        duration: a.duration, tailTempo: a.tailTempo, loudness: m.loudness ?? a.loudness,
+      });
+      it.markers = this.publicMarkers(it.prep);
+      const live = this.sources.find((s) => s.item === it);
+      if (live) {
+        live.trimEnd = Math.round(a.endSec * SR);
+        live.markers = m;
+        if (live === this.anchor && this.cue && !this.cue.committed) this.uncue(); // re-plan the segue on the real fade point
+      }
+    }
   }
 
   releasePrep(it) {
@@ -636,7 +659,7 @@ export class Playout extends EventEmitter {
     const d = prep.decoder || src?.decoder;
     if (!d) return;
     const end = d.decoded;
-    const from = Math.max(0, end - Math.round(40 * SR));
+    const from = Math.max(0, end - Math.round(75 * SR)); // long fades start well before the end
     const pcm = d.range(from, end);
     if (!pcm) return;
     const loudness = d.loudness();

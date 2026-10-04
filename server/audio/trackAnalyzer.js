@@ -2,6 +2,7 @@
 // is written to disk — and returns markers, loudness, tempo, synced-lyrics timing and the waveform.
 
 import fs from 'node:fs';
+import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import { CACHE_DIR } from '../config.js';
 import * as mono from '../sources/monochrome.js';
@@ -14,6 +15,32 @@ const PEAKS_DIR = path.join(CACHE_DIR, 'peaks');
 const running = new Map();
 
 export function peaksFile(id) { return path.join(PEAKS_DIR, `${id}.i8`); }
+
+/** 'analyzed' (id, analysis): a song's ending and fade point are now known. */
+export const analysisEvents = new EventEmitter();
+
+const TAIL_SEC = 75; // long enough to see a long fade from its start
+
+const queue = [];
+let draining = false;
+/**
+ * Analyse songs in the background, one at a time, as soon as their files are in: the ending type and the
+ * fade's mix-out point are then known when the segue is planned, not discovered as the song ends.
+ */
+export function queueAnalysis(id) {
+  const t = library.findTrack(id);
+  if (!t || (t.analysis?.v === 2 && t.analysis.endType) || running.has(id) || queue.includes(id)) return;
+  queue.push(id);
+  if (draining) return;
+  draining = true;
+  (async () => {
+    while (queue.length) {
+      const next = queue.shift();
+      try { await analyzeTrack(next); } catch { /* skipped; tried again next time it comes up */ }
+    }
+    draining = false;
+  })();
+}
 
 export function analyzeTrack(id) {
   if (running.has(id)) return running.get(id);
@@ -31,7 +58,7 @@ export function analyzeTrack(id) {
       const end = d.decoded;
       const loudness = d.loudness();
       const head = await analyze('head', d.range(0, Math.round(48 * SR)), { refLoudness: loudness });
-      const from = Math.max(0, end - Math.round(40 * SR));
+      const from = Math.max(0, end - Math.round(TAIL_SEC * SR));
       const tail = await analyze('tail', d.range(from, end), { offsetSec: from / SR, refLoudness: loudness });
       const lyrics = await lookupVocalTiming({ title: t.title, artist: t.artist, album: t.album, duration: end / SR });
       const analysis = {
@@ -40,6 +67,7 @@ export function analyzeTrack(id) {
         tailTempo: tail.tempo, endType: tail.endType, mixOut: tail.mixOut, lastLoud: tail.lastLoud,
       };
       library.updateTrack(id, { analysis, ...(lyrics.status !== 'error' ? { lyrics: { ...lyrics, checkedAt: Date.now() } } : {}) });
+      analysisEvents.emit('analyzed', id, analysis);
       fs.mkdirSync(PEAKS_DIR, { recursive: true });
       const pk = d.peaksArray();
       fs.writeFileSync(peaksFile(id), Buffer.from(pk.buffer, pk.byteOffset, pk.byteLength));

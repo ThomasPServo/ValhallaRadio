@@ -37,6 +37,7 @@ import { songInfo } from './sources/songInfo.js';
 import { classifyImaging, imagingName } from './audio/imagingImport.js';
 import { startJanitor, forgetSong, janitorStatus } from './scheduler/janitor.js';
 import { computePeaks, ensurePeaks, readPeaks } from './audio/peakFile.js';
+import { cleanTitle } from './sources/arcod.js';
 
 const scheduler = new Scheduler();
 const streamer = new Streamer();
@@ -648,6 +649,11 @@ setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', e
   if (changed) { applyMarketTimezone(store.data.station); store.save(); }
 }
 
+{ // catalogue labels ("(2001 Remaster)") out of song titles the DJ reads
+  let n = 0;
+  for (const t of store.data.library) { const c = cleanTitle(t.title); if (c && c !== t.title) { t.title = c; n++; } }
+  if (n) { store.save(); console.log(`[library] cleaned ${n} song title(s)`); }
+}
 { const fixed = library.repairYears(); if (fixed) console.log(`[library] corrected the year of ${fixed} song(s) released on compilations`); }
 if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
 const imagingCheck = startAutoImaging();

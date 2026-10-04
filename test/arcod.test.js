@@ -55,6 +55,10 @@ test('Qobuz tracks become Valhalla tracks', () => {
   assert.equal(t.id, 'qz-31907362');
   assert.equal(t.title, 'Hangar 18', 'remaster labels are not part of the title the DJ reads');
   assert.equal(arcod.normalizeTrack({ ...QTRACK, version: 'Live' }).title, 'Hangar 18 (Live)', 'a live version is a different record');
+  assert.equal(arcod.cleanTitle('Dreams (2001 Remaster)'), 'Dreams');
+  assert.equal(arcod.cleanTitle('Africa (Album Version)'), 'Africa');
+  assert.equal(arcod.cleanTitle('Layla - 2011 Remastered'), 'Layla');
+  assert.equal(arcod.cleanTitle('Shout (Radio Edit)'), 'Shout (Radio Edit)', 'an edit is a different record');
   assert.equal(t.artist, 'Megadeth, Guest');
   assert.equal(t.album, 'Rust In Peace');
   assert.equal(t.albumId, 'qz-0060254789932');

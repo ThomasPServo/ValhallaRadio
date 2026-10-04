@@ -17,6 +17,7 @@ import { store } from '../store.js';
 import { getFetch, activeFetch, fetcherStatus, BACKGROUND, CHUNK } from './fetcher.js';
 import * as arcod from './arcod.js';
 import { ensurePeaks } from '../audio/peakFile.js';
+import { queueAnalysis } from '../audio/trackAnalyzer.js';
 import { findTrack } from '../scheduler/library.js';
 
 const UA = 'ValhallaRadio/0.1 (+radio automation)';
@@ -224,7 +225,7 @@ export function fetchTrack(trackId, { priority = 1000 } = {}) {
   } else {
     f = getFetch(id, streamUrl(id), final, { priority });
   }
-  if (!f._pruneHooked) { f._pruneHooked = true; f.done.then((file) => { ensurePeaks(id, file); pruneCache(); }, () => {}); } // the whole waveform, as soon as the file is in
+  if (!f._pruneHooked) { f._pruneHooked = true; f.done.then((file) => { ensurePeaks(id, file); queueAnalysis(id); pruneCache(); }, () => {}); } // waveform, ending and fade point as soon as the file is in
   return f;
 }
 

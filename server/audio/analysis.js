@@ -197,6 +197,8 @@ export function analyzeTail(pcm, { offsetSec = 0, refLoudness } = {}) {
   const endSec = offsetSec + end / FS;
   let lastLoud = -1;
   for (let i = c.length - 1; i >= 0; i--) if (c[i] >= ref - 6) { lastLoud = i; break; }
+  // a long fade can already be under way where the window starts: judge the whole window then
+  if (lastLoud < 0 && c.length) lastLoud = 0;
   const lastLoudSec = offsetSec + Math.max(0, lastLoud) * hop;
   const decay = endSec - lastLoudSec;
   // fade = a long, steady decline; cold = the music stops (maybe with a short ring-out)

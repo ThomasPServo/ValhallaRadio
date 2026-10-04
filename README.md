@@ -156,6 +156,15 @@ Claude writes in the persona's voice and is never allowed to invent facts. Numbe
 - **Cache warming:** when nothing urgent is fetching, the rest of the library is fetched in the background, power rotation first, until the cache is 90% full.
 - **Cache size:** the cache defaults to 8 GB, about 250 lossless songs. Every cached song airs without touching the origin, so a cache that holds your whole rotation means steady state needs almost no network. *Engineering → Decks* shows the fetch queue, speed and connections live.
 
+### Segues on fade-outs
+
+When a song's file arrives, a background pass works out how it ends. The pass covers the last 75 seconds, so long fades are seen from where they start.
+
+- **Fade-outs:** the next song comes in a few seconds into the fade, about 9 dB down, typically 10–15 seconds before the music would end. It plays over the rest of the fade instead of waiting for silence.
+- **Cold endings:** the segue is tight, letting the final hit ring out.
+
+Because this is known before the song airs, the segue is planned on the real fade point from the start. If a song airs before its analysis finishes, the plan is redone the moment it does. A mix-out point you set by hand in the waveform editor always wins.
+
 ### Waveforms, previews and disk space
 
 - **Whole waveforms at once.** As soon as a song's file arrives, one quick pass computes its entire waveform, so the studio shows the whole song the moment it's scheduled instead of filling it in as it plays.

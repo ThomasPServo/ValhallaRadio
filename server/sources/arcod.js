@@ -53,6 +53,10 @@ const nameOf = (a) => (typeof a?.name === 'object' ? a.name?.display : a?.name) 
 const yearOf = (d) => (d ? Number(String(d).slice(0, 4)) || null : null);
 const imageOf = (img) => img?.large || img?.small || img?.thumbnail || '';
 
+const CATALOGUE_LABEL = /\s*[([][^)\]]*\b(remaster(ed)?|album version|lp version|mono|stereo|deluxe|bonus track|anniversary|expanded)\b[^)\]]*[)\]]/gi;
+/** "Dreams (2001 Remaster)" → "Dreams": catalogue labels aren't part of the song's name (a live take or radio edit is). */
+export const cleanTitle = (s) => String(s || '').replace(CATALOGUE_LABEL, '').replace(/\s+-\s+(\d{4}\s+)?remaster(ed)?(\s+\d{4})?\s*$/i, '').trim();
+
 /** A Qobuz track as a Valhalla track. */
 export function normalizeTrack(t, extra = {}) {
   if (!t?.id) return null;
@@ -61,7 +65,7 @@ export function normalizeTrack(t, extra = {}) {
   const featured = (t.artists || []).filter((a) => (a.roles || []).includes('featured-artist')).map(nameOf).filter(Boolean);
   // keep versions that change the record (live, remix, acoustic, edit), not catalogue labels the DJ shouldn't read
   const label = /remaster|^mono$|^stereo$|deluxe|anniversary|expanded|edition|bonus/i.test(t.version || '');
-  const title = t.version && !label && !String(t.title).includes(t.version) ? `${t.title} (${t.version})` : t.title;
+  const title = cleanTitle(t.version && !label && !String(t.title).includes(t.version) ? `${t.title} (${t.version})` : t.title);
   return {
     id: `${PREFIX}${t.id}`,
     title: title || 'Unknown Title',
