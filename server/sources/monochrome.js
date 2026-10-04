@@ -224,7 +224,7 @@ export function fetchTrack(trackId, { priority = 1000 } = {}) {
   return f;
 }
 
-const ARCOD_CHUNK = 8 * 1024 * 1024; // arcod sends megabytes per second: a song in one or two requests
+const ARCOD_CHUNK = 1024 * 1024 * 1024; // arcod sends megabytes per second: the whole song in one request (a dropped one resumes)
 const arcodResolver = (arcodId) => async () => ({ url: await arcod.playUrl(arcodId), chunkSize: ARCOD_CHUNK, tag: `arcod:${arcod.quality()}`, group: 'arcod' });
 
 /** Download a track to the local cache; resolves with its path. */
@@ -257,7 +257,7 @@ export function cacheBytes() {
  * first, at the lowest priority, until the cache is 90% full. Rotation repeats songs, so once the
  * rotation is cached the station barely needs the (slow) origin at all.
  */
-export function startCacheWarmer(songs, { everyMs = 30_000 } = {}) {
+export function startCacheWarmer(songs, { everyMs = 10_000 } = {}) {
   const order = ['A', 'B', 'N', 'C', 'G'];
   const tick = () => {
     if (store.settings.warmCache === false) return;

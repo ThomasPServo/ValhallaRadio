@@ -481,7 +481,9 @@ export class Playout extends EventEmitter {
 
   /** Fetch the songs coming up in the log into the cache, in airplay order, well before they air. */
   prefetch() {
-    const ahead = Math.max(0, Number(store.settings.prefetchSongs ?? 10));
+    // arcod fetches a song in seconds: every song in the log is on disk long before it airs.
+    // monochrome is slow, so only the next few are fetched, in order.
+    const ahead = mono.musicSource() === 'arcod' ? Infinity : Math.max(0, Number(store.settings.prefetchSongs ?? 10));
     const songs = this.scheduler.pendingItems().filter((i) => i.type === 'music' && i.trackId);
     const keep = new Set();
     let n = 0;
