@@ -2,6 +2,9 @@ FROM node:22-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+# Claude Code CLI: the station's AI runs on your Claude subscription (pass CLAUDE_CODE_OAUTH_TOKEN)
+ARG INSTALL_CLAUDE_CODE=1
+RUN if [ "$INSTALL_CLAUDE_CODE" = "1" ]; then npm install -g @anthropic-ai/claude-code && npm cache clean --force; fi
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev

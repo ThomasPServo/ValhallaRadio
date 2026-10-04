@@ -13,7 +13,7 @@ export const fmtTenths = (s) => {
 export const KIND = { music: 'music', dj: 'voice', weather: 'voice', traffic: 'voice', news: 'voice', say: 'voice', toh_id: 'imaging', id: 'imaging', sweeper: 'imaging', liner: 'imaging', promo: 'imaging', spot: 'spot' };
 export const ICON = { music: '🎵', voice: '🎙️', imaging: '✨', spot: '💵' };
 export const TYPE_LABEL = { toh_id: 'Legal ID', id: 'Station ID', sweeper: 'Sweeper', liner: 'Liner', promo: 'Promo', music: 'Music', dj: 'DJ Break', weather: 'Weather', traffic: 'Traffic', news: 'News', stopset: 'Stopset', say: 'Live Read', spot: 'Spot' };
-export const KIND_COLOR = { music: '#3ea6ff', voice: '#ffb020', imaging: '#b18cff', spot: '#22d36b' };
+export const KIND_COLOR = { music: '#3ea6ff', voice: '#ffb020', imaging: '#b18cff', spot: '#22d36b', bed: '#2ed3d3' };
 export const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 /** Live client state. Times received from the server are anchored with performance.now(). */

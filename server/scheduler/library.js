@@ -35,6 +35,45 @@ export function playable() {
  * Add a song. In clean-only mode an explicit song is swapped for its clean version (radio edit);
  * if none exists the add is refused with code EXPLICIT.
  */
+const COMPILATION = /\b(hits|mix|mixtape|collection|greatest|best of|essentials?|playlist|anthology|compilation|now that's|ultimate|vol\.?\s*\d|volume \d|party|top \d+|songs of|summer songs|workout|throwback|classics|the very best|hit list|\d+ (greatest|essential))\b/i;
+
+/** Is this album a compilation or playlist release rather than the original album? */
+export function isCompilation(album) {
+  return COMPILATION.test(String(album || ''));
+}
+
+/**
+ * The year a recording was made. Compilations and reissues carry their own (later) release year,
+ * but the ISRC keeps the year the recording was registered: USAR19200123 → 1992.
+ */
+export function originalYear(t, nowYear = new Date().getFullYear()) {
+  const m = String(t.isrc || '').toUpperCase().match(/^[A-Z]{2}[A-Z0-9]{3}(\d{2})\d{5}$/);
+  let isrcYear = null;
+  if (m) {
+    const yy = Number(m[1]);
+    isrcYear = yy <= (nowYear % 100) + 1 ? 2000 + yy : 1900 + yy;
+  }
+  const y = Number(t.year) || null;
+  if (isrcYear && isrcYear >= 1950 && (!y || isrcYear < y)) return isrcYear;
+  return y;
+}
+
+/** One-time repair for libraries built before compilation years were corrected. */
+export function repairYears() {
+  let n = 0;
+  for (const t of store.data.library) {
+    const y = originalYear(t);
+    const comp = isCompilation(t.album);
+    if (y !== t.year || comp !== Boolean(t.compilation)) {
+      // a never-played seed filed as a current because of its compilation year is really a gold title
+      if (y && t.year && t.year - y >= 8 && !t.plays && ['A', 'B', 'N'].includes(t.category) && store.data.categories.some((c) => c.id === 'G')) t.category = 'G';
+      t.releaseYear ??= t.year; t.year = y; t.compilation = comp; n++;
+    }
+  }
+  if (n) store.save();
+  return n;
+}
+
 export async function addTrack(track, category = 'N', extra = {}) {
   if (cleanOnly() && track.explicit) {
     const clean = await findCleanVersion(track);
@@ -55,7 +94,9 @@ export async function addTrack(track, category = 'N', extra = {}) {
     artist: enriched.artist,
     album: enriched.album || '',
     albumId: enriched.albumId || '',
-    year: enriched.year || null,
+    year: originalYear(enriched) || null,
+    releaseYear: enriched.year || null,
+    compilation: isCompilation(enriched.album),
     artwork: enriched.artwork || '',
     duration: enriched.duration || 0,
     isrc: enriched.isrc || '',

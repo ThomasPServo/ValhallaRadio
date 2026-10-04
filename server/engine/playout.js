@@ -195,12 +195,13 @@ export class Playout extends EventEmitter {
   async reloadBed() {
     const id = chosenBedId();
     if (this.bedAudio?.id === id) return;
-    try {
-      this.bedAudio = await loadBed(id);
-      log(`auto-bed ready: ${this.bedAudio.name} (${this.bedAudio.seconds.toFixed(1)}s loop)`);
-    } catch (err) {
-      this.fail(new Error(`auto-bed: ${err.message}`));
-    }
+    if (this.bedLoading?.id === id) return this.bedLoading.promise; // already on its way
+    const promise = loadBed(id)
+      .then((bed) => { this.bedAudio = bed; log(`auto-bed ready: ${bed.name} (${bed.seconds.toFixed(1)}s loop)`); })
+      .catch((err) => this.fail(new Error(`auto-bed: ${err.message}`)))
+      .finally(() => { if (this.bedLoading?.promise === promise) this.bedLoading = null; });
+    this.bedLoading = { id, promise };
+    return promise;
   }
 
   /** Does this element want a bed under it when there's no music to talk over? */

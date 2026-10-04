@@ -88,7 +88,7 @@ export function drawTimeline(canvas, items, dt, getPeaks, { before = 12, span = 
   const { ctx, w, h } = fit(canvas);
   ctx.clearRect(0, 0, w, h);
   const X = (t) => ((t + before) / span) * w;
-  const lanes = { musicA: [8, 52], musicB: [62, 106], other: [116, 142] };
+  const lanes = { musicA: [8, 48], musicB: [56, 96], other: [104, 130], bed: [136, 146] };
   // grid every 10 s
   ctx.font = '10px "JetBrains Mono", ui-monospace, monospace';
   for (let t = -10; t < span - before; t += 10) {
@@ -97,12 +97,12 @@ export function drawTimeline(canvas, items, dt, getPeaks, { before = 12, span = 
     if (t) { ctx.fillStyle = 'rgba(160,170,190,.45)'; ctx.fillText(`${t > 0 ? '+' : ''}${t}s`, gx + 3, h - 3); }
   }
   ctx.fillStyle = 'rgba(160,170,190,.5)';
-  ctx.fillText('MUSIC A', 4, 18); ctx.fillText('MUSIC B', 4, 72); ctx.fillText('VOICE / FX / SPOTS', 4, 128);
+  ctx.fillText('MUSIC A', 4, 18); ctx.fillText('MUSIC B', 4, 66); ctx.fillText('VOICE / FX / SPOTS', 4, 114); ctx.fillText('BED', 4, 144);
   let deck = 0;
   const assigned = new Map();
   const sorted = [...items].sort((a, b) => a.start - b.start);
   for (const it of sorted) {
-    if (it.kind === 'music' && !it.overlay) { assigned.set(it.id, deck ? 'musicB' : 'musicA'); deck ^= 1; } else assigned.set(it.id, 'other');
+    if (it.kind === 'music' && !it.overlay) { assigned.set(it.id, deck ? 'musicB' : 'musicA'); deck ^= 1; } else assigned.set(it.id, it.kind === 'bed' ? 'bed' : 'other');
   }
   for (const it of sorted) {
     const s = it.start - dt; const e = s + it.len;
@@ -222,7 +222,7 @@ export function drawHourClock(canvas, o) {
   ctx.strokeStyle = '#ff2d3d'; ctx.lineWidth = 1.5;
   ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(sa) * R * 0.6, cy + Math.sin(sa) * R * 0.6); ctx.stroke();
   ctx.fillStyle = '#10141c'; ctx.beginPath(); ctx.arc(cx, cy, R * 0.36, 0, Math.PI * 2); ctx.fill();
-  const left = 3600 - nowSec;
+  const left = Math.max(0, Math.ceil(3600 - nowSec));
   ctx.fillStyle = '#e8ebf2'; ctx.textAlign = 'center';
   ctx.font = `800 ${Math.round(R * 0.2)}px "JetBrains Mono", ui-monospace, monospace`;
   ctx.fillText(`${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`, cx, cy + R * 0.04);

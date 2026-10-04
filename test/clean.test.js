@@ -52,3 +52,41 @@ test('clean-only mode keeps explicit songs out of every rotation pool', () => {
   assert.deepEqual(library.playable().map((t) => t.id).sort(), ['1', '2']);
   store.settings.cleanOnly = true;
 });
+
+test('original year from the ISRC when a song comes from a compilation', () => {
+  assert.equal(library.originalYear({ isrc: 'USAR19200110', year: 2026 }, 2026), 1992);
+  assert.equal(library.originalYear({ isrc: 'USUM72401234', year: 2024 }, 2026), 2024);
+  assert.equal(library.originalYear({ isrc: 'USRC12600001', year: 2026 }, 2026), 2026);
+  assert.equal(library.originalYear({ isrc: '', year: 2001 }, 2026), 2001);
+  assert.equal(library.originalYear({ isrc: 'bogus', year: 1999 }, 2026), 1999);
+  assert.ok(library.isCompilation('Summer Songs Mix: BBQ, Country & Beach Party Hits'));
+  assert.ok(library.isCompilation('Greatest Hits'));
+  assert.ok(!library.isCompilation('Brand New Man'));
+  assert.ok(!library.isCompilation('Mixed Emotions'));
+});
+
+test('year repair moves never-played seeds from compilations to gold', () => {
+  const saved = store.data.library;
+  store.data.library = [
+    { id: 'x1', title: "Boot Scootin' Boogie", artist: 'Brooks & Dunn', album: 'Summer Songs Mix: BBQ, Country & Beach Party Hits', year: 2026, isrc: 'USAR19200110', category: 'A', plays: 0 },
+    { id: 'x2', title: 'Neon Moon', artist: 'Brooks & Dunn', album: 'Brand New Man', year: 1991, isrc: 'USAR19100123', category: 'G', plays: 3 },
+    { id: 'x3', title: 'Played Already', artist: 'X', album: 'Hits Collection', year: 2025, isrc: 'USAB10500001', category: 'A', plays: 4 },
+  ];
+  assert.equal(library.repairYears(), 2);
+  const [a, b, c] = store.data.library;
+  assert.deepEqual([a.year, a.category, a.compilation, a.releaseYear], [1992, 'G', true, 2026]);
+  assert.deepEqual([b.year, b.category], [1991, 'G']);
+  assert.deepEqual([c.year, c.category], [2005, 'A'], 'played songs keep the category the station chose');
+  store.data.library = saved;
+});
+
+test('discovery only accepts a catalogue match by the suggested artist', async () => {
+  const { matchScore } = await import('../server/sources/monochrome.js');
+  const want = { artist: 'Ashley McBryde', title: 'The Heart Wants What It Wants' };
+  assert.equal(matchScore(want, { artist: 'Selena Gomez', title: 'The Heart Wants What It Wants' }), 0, 'same title, different artist');
+  assert.equal(matchScore({ artist: 'Riley Green', title: 'Worst Way' }, { artist: 'Riley Green', title: 'Worst Way' }), 100);
+  assert.ok(matchScore({ artist: 'Ella Langley', title: 'you look like you love me' }, { artist: 'Ella Langley, Riley Green', title: 'you look like you love me (feat. Riley Green)' }) >= 75);
+  assert.ok(matchScore({ artist: 'Riley Green', title: 'you look like you love me' }, { artist: 'Ella Langley, Riley Green', title: 'you look like you love me' }) >= 75, 'featured artist credit');
+  assert.ok(matchScore({ artist: 'The Killers', title: 'Mr. Brightside' }, { artist: 'Killers', title: 'Mr. Brightside' }) >= 75);
+  assert.ok(matchScore({ artist: 'Riley Green', title: 'Worst Way' }, { artist: 'Riley Green', title: 'Worst Way (Live)' }) < 75, 'no live versions');
+});

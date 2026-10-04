@@ -83,7 +83,10 @@ button:disabled { opacity: .45; cursor: default; }
 .tally.warn { background: #3b2a05; color: var(--yellow); border-color: #6b4e0c; animation: blink 1s steps(2) infinite; }
 @keyframes tally { 50% { box-shadow: 0 0 6px rgba(255, 45, 61, .3); } }
 @keyframes blink { 50% { opacity: .35; } }
-.clock { font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; }
+.clock { font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: .02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clock small { font-size: 11px; color: var(--muted); margin-left: 6px; font-weight: 600; letter-spacing: .06em; }
+.toh.soon b { color: var(--onair); }
+.pill b { font-weight: 600; color: var(--text); }
 .toh { font-family: var(--mono); font-size: 13px; color: var(--muted); }
 .toh b { color: var(--text); }
 .spacer { flex: 1; }
@@ -269,4 +272,49 @@ details summary { cursor: pointer; color: var(--muted); }
   .timer .v { font-size: 26px; }
   .log .item, .queue .item { grid-template-columns: 56px 30px 1fr; }
   .log .item > :last-child, .queue .item > :last-child { grid-column: 1 / -1; justify-content: flex-end; }
+}
+
+/* ------------------------------------------------------------ library & banners */
+.banner { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.banner.warn { border-color: #6b4e0c; background: linear-gradient(180deg, #2a2108, #17130a); }
+.banner.ok { border-color: #13532f; }
+.badge.e { color: #fff; background: #7f1d1d; border-color: #b91c1c; }
+.badge.clean { color: var(--green); border-color: #13532f; }
+.badge.auto { color: var(--cyan); border-color: #135858; }
+.songcell { display: flex; gap: 8px; align-items: center; min-width: 220px; }
+.libtable td { padding: 6px 8px; }
+tr.off { opacity: .45; }
+.modal.wide .box { width: min(1100px, 100%); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
+.kv > :nth-child(odd) { color: var(--muted); }
+
+/* ------------------------------------------------------------ views (v2) */
+.sep { height: 1px; background: var(--line); margin: 4px 0; }
+.listbtn { display: flex; width: 100%; gap: 8px; align-items: center; text-align: left; margin-bottom: 6px; }
+.listbtn.on { border-color: var(--accent); background: #241c0b; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; background: linear-gradient(135deg, var(--accent), var(--onair)); display: grid; place-items: center; font-weight: 900; color: #160c02; font-size: 18px; flex: none; }
+.presets { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+.preset { text-align: left; white-space: normal; padding: 10px 12px; display: flex; flex-direction: column; gap: 3px; }
+.preset span { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+.preset.on { border-color: var(--accent); background: #241c0b; }
+.ctl.changed label span:first-child { color: var(--accent); }
+.logo-drop { width: 96px; height: 96px; border-radius: 14px; border: 1px dashed var(--line-2); display: grid; place-items: center; cursor: pointer; overflow: hidden; flex: none; color: var(--muted); font-size: 12px; background: var(--bg-2); }
+.logo-drop:hover { border-color: var(--accent); color: var(--text); }
+.logo-drop img { width: 100%; height: 100%; object-fit: cover; }
+.locrow { display: flex; gap: 8px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.caprow { display: flex; gap: 8px; align-items: center; padding: 3px 0; flex-wrap: wrap; }
+.caprow .dot { display: inline-block; }
+.feedcard { background: var(--bg-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin-top: 8px; }
+.beds { display: grid; gap: 6px; margin-top: 10px; }
+.bed { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg-2); }
+.bed.on { border-color: #13532f; }
+.fname { min-width: 52px; }
+.format span { display: block; }
+.readout .v { white-space: nowrap; }
+@media (max-width: 1180px) {
+  .readouts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  main .grid[style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+  .readouts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

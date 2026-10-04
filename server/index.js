@@ -48,7 +48,7 @@ app.get('/stream.mp3', (req, res) => {
 });
 function publicStation() {
   const st = store.station;
-  return { name: st.name, callSign: st.callSign, frequency: st.frequency, slogan: st.slogan, logo: st.logo ? `/uploads/${st.logo}` : null, website: st.website, socials: st.socials, phone: st.phone };
+  return { name: st.name, callSign: st.callSign, frequency: st.frequency, slogan: st.slogan, logo: st.logo ? `/station-logo?v=${encodeURIComponent(st.logo)}` : null, website: st.website, socials: st.socials, phone: st.phone };
 }
 app.get('/api/nowplaying', (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
@@ -525,6 +525,7 @@ setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', e
   if (changed) { applyMarketTimezone(store.data.station); store.save(); }
 }
 
+{ const fixed = library.repairYears(); if (fixed) console.log(`[library] corrected the year of ${fixed} song(s) released on compilations`); }
 if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
 const imagingCheck = startAutoImaging();
 setupEvents.on('progress', (p) => { if (p.done) setTimeout(imagingCheck, 5000); }); // a new station's first fresh imaging, once its library is in

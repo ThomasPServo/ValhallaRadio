@@ -17,7 +17,7 @@ export const PRESETS = {
     stereo: { width: 1.05, bassMonoHz: 110 },
     eq: { bassDb: 1.5, warmthDb: -0.5, presenceDb: 1, airDb: 1.5 },
     multiband: { drive: 1.5, bands: [[-20, 2.5], [-21, 2.5], [-22, 2.2], [-23, 2], [-24, 2]] },
-    clipper: { driveDb: 0 }, limiter: { ceilingDb: -1, releaseMs: 90 }, outputGainDb: -3.2,
+    clipper: { driveDb: 0 }, limiter: { ceilingDb: -1, releaseMs: 90 }, outputGainDb: 0, loudness: -14, finalDriveDb: 3,
   },
   chr: {
     name: 'Hot Hits / CHR', description: 'Loud, bright and dense, the classic Top 40 sound.',
@@ -25,7 +25,7 @@ export const PRESETS = {
     stereo: { width: 1.18, bassMonoHz: 120 },
     eq: { bassDb: 3, warmthDb: -1.5, presenceDb: 2, airDb: 3.5 },
     multiband: { drive: 5, bands: [[-22, 3.5], [-23, 3], [-24, 3], [-24, 3], [-25, 3.5]] },
-    clipper: { driveDb: 2 }, limiter: { ceilingDb: -1, releaseMs: 60 }, outputGainDb: 0,
+    clipper: { driveDb: 2 }, limiter: { ceilingDb: -1, releaseMs: 60 }, outputGainDb: 0, loudness: -11, finalDriveDb: 2.5,
   },
   ac: {
     name: 'Adult Contemporary', description: 'Smooth, warm and polished, with less density.',
@@ -33,7 +33,7 @@ export const PRESETS = {
     stereo: { width: 1.1, bassMonoHz: 110 },
     eq: { bassDb: 2, warmthDb: 0, presenceDb: 1, airDb: 2 },
     multiband: { drive: 3, bands: [[-21, 2.5], [-22, 2.5], [-23, 2.2], [-23, 2.2], [-24, 2.5]] },
-    clipper: { driveDb: 1 }, limiter: { ceilingDb: -1, releaseMs: 90 }, outputGainDb: -1,
+    clipper: { driveDb: 1 }, limiter: { ceilingDb: -1, releaseMs: 90 }, outputGainDb: 0, loudness: -13, finalDriveDb: 2,
   },
   rock: {
     name: 'Rock / Classic Rock', description: 'Punchy mids and tight bass, guitars forward.',
@@ -41,7 +41,7 @@ export const PRESETS = {
     stereo: { width: 1.12, bassMonoHz: 120 },
     eq: { bassDb: 2, warmthDb: 0.5, presenceDb: 2.5, airDb: 1.5 },
     multiband: { drive: 4, bands: [[-21, 3], [-22, 3], [-23, 2.5], [-24, 3], [-24, 3]] },
-    clipper: { driveDb: 1.5 }, limiter: { ceilingDb: -1, releaseMs: 70 }, outputGainDb: -0.5,
+    clipper: { driveDb: 1.5 }, limiter: { ceilingDb: -1, releaseMs: 70 }, outputGainDb: 0, loudness: -12, finalDriveDb: 2,
   },
   urban: {
     name: 'Hip-Hop / R&B', description: 'Big, controlled low end with clean highs.',
@@ -49,7 +49,7 @@ export const PRESETS = {
     stereo: { width: 1.12, bassMonoHz: 140 },
     eq: { bassDb: 4.5, warmthDb: -1.5, presenceDb: 1.5, airDb: 2.5 },
     multiband: { drive: 4.5, bands: [[-20, 3], [-22, 3], [-23, 3], [-24, 3], [-25, 3]] },
-    clipper: { driveDb: 2 }, limiter: { ceilingDb: -1, releaseMs: 60 }, outputGainDb: 0,
+    clipper: { driveDb: 2 }, limiter: { ceilingDb: -1, releaseMs: 60 }, outputGainDb: 0, loudness: -11.5, finalDriveDb: 1.5,
   },
   country: {
     name: 'Country', description: 'Warm vocals and acoustic detail, with an open top end.',
@@ -57,7 +57,7 @@ export const PRESETS = {
     stereo: { width: 1.1, bassMonoHz: 110 },
     eq: { bassDb: 2, warmthDb: 0.5, presenceDb: 2, airDb: 2 },
     multiband: { drive: 3.5, bands: [[-21, 2.5], [-22, 2.5], [-23, 2.5], [-23, 2.5], [-24, 2.5]] },
-    clipper: { driveDb: 1 }, limiter: { ceilingDb: -1, releaseMs: 80 }, outputGainDb: -0.5,
+    clipper: { driveDb: 1 }, limiter: { ceilingDb: -1, releaseMs: 80 }, outputGainDb: 0, loudness: -12.5, finalDriveDb: 2,
   },
   dance: {
     name: 'Dance / EDM', description: 'Maximum punch and loudness for club tracks.',
@@ -65,7 +65,7 @@ export const PRESETS = {
     stereo: { width: 1.2, bassMonoHz: 140 },
     eq: { bassDb: 4, warmthDb: -2, presenceDb: 1.5, airDb: 3.5 },
     multiband: { drive: 6, bands: [[-21, 4], [-23, 3.5], [-24, 3], [-25, 3], [-25, 3.5]] },
-    clipper: { driveDb: 2.5 }, limiter: { ceilingDb: -1, releaseMs: 50 }, outputGainDb: 0,
+    clipper: { driveDb: 2.5 }, limiter: { ceilingDb: -1, releaseMs: 50 }, outputGainDb: 0, loudness: -10.5, finalDriveDb: 2,
   },
   talk: {
     name: 'News / Talk', description: 'Dense and intelligible voice, with a controlled low end.',
@@ -73,7 +73,7 @@ export const PRESETS = {
     stereo: { width: 1, bassMonoHz: 200 },
     eq: { bassDb: 0, warmthDb: -2, presenceDb: 3, airDb: 1.5 },
     multiband: { drive: 5, bands: [[-22, 3], [-24, 4], [-25, 4], [-25, 3.5], [-26, 3]] },
-    clipper: { driveDb: 1.5 }, limiter: { ceilingDb: -1, releaseMs: 70 }, outputGainDb: 0,
+    clipper: { driveDb: 1.5 }, limiter: { ceilingDb: -1, releaseMs: 70 }, outputGainDb: 0, loudness: -13, finalDriveDb: 2,
   },
   gentle: {
     name: 'Classical / Jazz', description: 'Light touch that keeps natural dynamics.',
@@ -81,7 +81,7 @@ export const PRESETS = {
     stereo: { width: 1, bassMonoHz: 80 },
     eq: { bassDb: 0.5, warmthDb: 0, presenceDb: 0, airDb: 0.5 },
     multiband: { drive: 0, bands: [[-18, 1.6], [-18, 1.6], [-19, 1.5], [-20, 1.5], [-20, 1.5]] },
-    clipper: { driveDb: 0 }, limiter: { ceilingDb: -1, releaseMs: 150 }, outputGainDb: -4,
+    clipper: { driveDb: 0 }, limiter: { ceilingDb: -1, releaseMs: 150 }, outputGainDb: 0, loudness: -16, finalDriveDb: 3,
   },
 };
 
@@ -106,6 +106,9 @@ export function resolveParams(presetId = 'streaming', overrides = {}) {
     },
     clipper: { enabled: true, driveDb: 1 },
     limiter: { ceilingDb: -1, releaseMs: 80, lookaheadMs: 2.5 },
+    // final drive into the clipper/limiter sets the loudness; auto-trim holds the target (BS.1770)
+    loudness: { targetLufs: -14, autoTrim: true, maxTrimDb: 6 },
+    finalDriveDb: 0,
     outputGainDb: 0,
   };
   const merged = structuredClone(base);
@@ -117,6 +120,8 @@ export function resolveParams(presetId = 'streaming', overrides = {}) {
   Object.assign(merged.clipper, p.clipper);
   Object.assign(merged.limiter, p.limiter);
   merged.outputGainDb = p.outputGainDb;
+  merged.loudness.targetLufs = p.loudness ?? merged.loudness.targetLufs;
+  merged.finalDriveDb = p.finalDriveDb ?? 0;
   return deepMerge(merged, overrides || {});
 }
 
@@ -131,18 +136,23 @@ function deepMerge(a, b) {
 
 /** 4x oversampling interpolator for true-peak estimation (windowed-sinc polyphase, ITU-R BS.1770 style). */
 class TruePeak {
-  constructor() {
-    const taps = 12; const phases = 4;
+  // 8x oversampling with 16-tap Blackman-windowed sinc phases: reads clipped, dense material within
+  // about 0.1 dB of a high-quality resampling meter (the minimal 4x BS.1770 filter under-reads overs)
+  constructor(phases = 8, taps = 16) {
     this.taps = taps;
     this.coefs = [];
+    const half = taps / 2 + 1;
     for (let p = 1; p < phases; p++) {
       const c = new Float64Array(taps);
+      let sum = 0;
       for (let t = 0; t < taps; t++) {
         const x = t - taps / 2 + 1 - p / phases;
         const sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
-        const w = 0.5 + 0.5 * Math.cos((Math.PI * x) / (taps / 2 + 1));
+        const w = 0.42 + 0.5 * Math.cos((Math.PI * x) / half) + 0.08 * Math.cos((2 * Math.PI * x) / half);
         c[t] = sinc * w;
+        sum += c[t];
       }
+      for (let t = 0; t < taps; t++) c[t] /= sum; // unity gain at DC for every phase
       this.coefs.push(c);
     }
     // doubled history so the window is always contiguous (no modulo in the inner loop)
@@ -228,8 +238,10 @@ export class BroadcastProcessor {
     this.limDelayL = new Float64Array(256); this.limDelayR = new Float64Array(256); this.limPos = 0;
     this.limQueueV = new Float64Array(512); this.limQueueI = new Float64Array(512); this.qHead = 0; this.qTail = 0; this.sampleIdx = 0;
     this.limGain = 1;
+    this.trimDb = 0; this.trimN = 0; this.driveS = 1;
     this.inMeter = new LoudnessMeter(fs); this.outMeter = new LoudnessMeter(fs);
     this.tp = new TruePeak();
+    this.limTp = new TruePeak(); // true-peak detection for the limiter (inter-sample overs)
     this.fft = new FFT(2048); this.scope = new Float32Array(2048); this.scopePos = 0;
     this.resetInterval();
     this.setParams(params);
@@ -276,8 +288,15 @@ export class BroadcastProcessor {
     this.limAtt = 1 - Math.exp(-1 / (la / 5));
     this.limRel = 1 - Math.exp(-1 / (((p.limiter.releaseMs || 80) / 1000) * fs));
     this.ceil = dbToLin(p.limiter.ceilingDb ?? -1);
-    this.clipDrive = dbToLin(p.clipper.enabled ? p.clipper.driveDb || 0 : 0);
+    if (this.presetKey !== p.preset) { this.presetKey = p.preset; this.trimDb = 0; }
+    this.updateDrive();
     this.mbDrive = dbToLin(p.multiband.drive || 0);
+  }
+
+  /** Gain into the clipper/limiter: clipper drive + calibrated final drive + loudness auto-trim. */
+  updateDrive() {
+    const p = this.p;
+    this.drive = dbToLin((p.clipper.enabled ? p.clipper.driveDb || 0 : 0) + (p.finalDriveDb || 0) + this.trimDb);
   }
 
   resetInterval() {
@@ -373,10 +392,24 @@ export class BroadcastProcessor {
           l = sl; r = sr;
         }
 
-        // clipper
+        // final drive (smoothed, so auto-trim never zippers) into the clipper and limiter
+        const d = (this.driveS += (this.drive - this.driveS) * 0.0005);
+        l *= d; r *= d;
         if (p.clipper.enabled) {
-          l = softClip(l * this.clipDrive, this.ceil * 1.05);
-          r = softClip(r * this.clipDrive, this.ceil * 1.05);
+          l = softClip(l, this.ceil * 1.05);
+          r = softClip(r, this.ceil * 1.05);
+        }
+
+        // loudness auto-trim: every 100 ms nudge the drive toward the target (gated, slow)
+        if (++this.trimN >= 4410) {
+          this.trimN = 0;
+          const L = p.loudness;
+          const st = this.outMeter.shortTerm - (p.outputGainDb || 0); // the target applies before the output trim
+          if (L?.autoTrim && !this.gated && st > -45) {
+            const err = L.targetLufs - st;
+            this.trimDb = Math.max(-L.maxTrimDb, Math.min(L.maxTrimDb, this.trimDb + Math.max(-0.06, Math.min(0.06, err * 0.04))));
+            this.updateDrive();
+          }
         }
       }
 
@@ -416,8 +449,12 @@ export class BroadcastProcessor {
 
   _limit(l, r) {
     const la = this.la; const c = this.ceil;
-    const peak = Math.max(Math.abs(l), Math.abs(r));
-    const req = peak > c ? c / peak : 1;
+    // detect on the 4x oversampled signal so inter-sample peaks stay under the ceiling after decoding;
+    // the estimator's ~5 sample delay is well inside the look-ahead window
+    const peak = this.limTp.push(l, r);
+    // 0.5 dB true-peak margin: what a decoder's reconstruction (or a 192 kHz meter) sees stays under the ceiling
+    const lim = c * 0.944;
+    const req = peak > lim ? lim / peak : 1;
     // sliding-window minimum of required gain (monotonic deque)
     const idx = this.sampleIdx++;
     const qv = this.limQueueV; const qi = this.limQueueI; const mask = 511;
@@ -457,6 +494,8 @@ export class BroadcastProcessor {
       in: { peakL: r(linToDb(iv.inPeakL)), peakR: r(linToDb(iv.inPeakR)), m: r(this.inMeter.momentary), s: r(this.inMeter.shortTerm) },
       out: { peakL: r(linToDb(iv.outPeakL)), peakR: r(linToDb(iv.outPeakR)), m: r(this.outMeter.momentary), s: r(this.outMeter.shortTerm), tp: r(linToDb(iv.tp)) },
       agc: r(this.agcGainDb),
+      trim: r(this.trimDb),
+      target: this.p.loudness?.targetLufs ?? -14,
       gated: Boolean(this.gated),
       bands: Array.from(iv.grMax, (g) => r(g)),
       limiter: r(-linToDb(iv.limMin)),

@@ -99,7 +99,8 @@ export function vetPiece(p, { station = store.station, existing = [], today = ''
   if (empty) return { ok: false, why: `the station has no ${empty}` };
   if (!used.some((u) => ['name', 'frequency', 'callSign'].includes(u))) return { ok: false, why: 'never says the station' };
   if (type === 'toh_id' && !(used.includes('callSign') && used.includes('market'))) return { ok: false, why: 'a legal ID needs the call letters and the city' };
-  if (used.includes('frequency') && used.includes('name') && station.frequency && String(station.name).includes(station.frequency)) return { ok: false, why: 'says the frequency twice (it is in the name)' };
+  const dial = String(station.frequency || '').replace(/\s*(FM|AM)$/i, '').trim();
+  if (used.includes('frequency') && used.includes('name') && dial && String(station.name).includes(dial)) return { ok: false, why: 'says the frequency twice (it is in the name)' };
   const plain = text.replace(/\{\w+\}/g, ' ');
   for (const [re, why] of BANNED) if (re.test(plain)) return { ok: false, why };
   // shouting caps read badly on TTS ("ALL" → "A L L"); keep the call sign's letters only
@@ -196,7 +197,7 @@ async function claudePieces(ctx, mix, guidance) {
       ...Object.entries(fxGuide).map(([k, v]) => `    ${k}: ${v}`),
     ].join('\n'),
     prompt: [
-      `Station: ${st.name}${st.slogan ? ` — "${st.slogan}"` : ''}.${st.frequency && st.name.includes(st.frequency) ? ' The name already contains the frequency, so never use {name} and {frequency} in the same piece.' : ''} Placeholders available: ${PLACEHOLDERS.filter((k) => ({ name: st.name, frequency: st.frequency, callSign: st.callSign, market: ctx.market, slogan: st.slogan, website: st.website })[k]).map((k) => `{${k}}`).join(' ')}`,
+      `Station: ${st.name}${st.slogan ? ` — "${st.slogan}"` : ''}.${st.frequency && st.name.includes(String(st.frequency).replace(/\s*(FM|AM)$/i, '').trim()) ? ' The name already contains the frequency, so never use {name} and {frequency} in the same piece.' : ''} Placeholders available: ${PLACEHOLDERS.filter((k) => ({ name: st.name, frequency: st.frequency, callSign: st.callSign, market: ctx.market, slogan: st.slogan, website: st.website })[k]).map((k) => `{${k}}`).join(' ')}`,
       `Format: ${st.format}`,
       ctx.market ? `Market: ${ctx.market}${st.market?.description ? ` — ${st.market.description}` : ''}` : '',
       `It is ${ctx.when.month} (${ctx.when.season}).${ctx.when.upcoming.length ? ` Coming up: ${ctx.when.upcoming.map((h) => `${h.name} on ${h.date}`).join(', ')}.` : ''}`,

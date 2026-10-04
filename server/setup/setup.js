@@ -75,7 +75,9 @@ async function seedArtist(name, f, perArtist) {
   const added = [];
   const seen = new Set();
   let rank = 0;
-  for (const t of info.topTracks) {
+  // original album versions first: playlist/compilation copies only if that's all there is
+  const tops = [...info.topTracks].sort((a, b) => Number(library.isCompilation(a.album)) - Number(library.isCompilation(b.album)));
+  for (const t of tops) {
     if (added.length >= perArtist) break;
     if (SKIP.test(t.title) || t.duration < 90 || t.duration > 480) continue;
     const k = norm(t.title);

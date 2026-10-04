@@ -34,7 +34,8 @@ export function daypartFor(hour) {
 
 function describeTrack(t) {
   if (!t) return null;
-  return `"${t.title}" by ${t.artist}${t.year ? ` (${t.year}${t.album ? `, from ${t.album}` : ''})` : t.album ? ` (from ${t.album})` : ''}${t.note ? ` — music director note: ${t.note}` : ''}`;
+  const album = t.compilation || /\b(hits|mix|playlist|collection|compilation|party)\b/i.test(t.album || '') ? '' : t.album; // never read a playlist title on air
+  return `"${t.title}" by ${t.artist}${t.year ? ` (${t.year}${album ? `, from ${album}` : ''})` : album ? ` (from ${album})` : ''}${t.note && t.note !== 'clean version' ? ` — music director note: ${t.note}` : ''}`;
 }
 
 function periodBrief(p) {
@@ -213,7 +214,11 @@ export function renderImagingText(text) {
     frequency: st.frequency || '', name: st.name || '', slogan: st.slogan || '', market: market || '',
     website: st.website ? st.website.replace(/^https?:\/\//, '').replace(/\/$/, '') : '',
   };
-  return String(text || '')
+  let t = String(text || '');
+  // "Lone Star 98.7" already says the frequency: don't say it twice in the same line
+  const dial = String(st.frequency || '').replace(/\s*(FM|AM)$/i, '').trim();
+  if (dial && String(st.name || '').includes(dial) && t.includes('{name}')) t = t.replace(/\{frequency\}[,.;:]?\s*/g, '');
+  return t
     .replace(/\{(callSign|frequency|name|slogan|market|website)\}/g, (_, k) => vals[k])
     .replace(/\s+([,.!?])/g, '$1')
     .replace(/([,.!?])(\s*[,.!?])+/g, '$1')

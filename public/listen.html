@@ -20,12 +20,17 @@
     .recent { margin-top: 20px; text-align: left; font-size: 13px; color: var(--muted); }
     .recent div { padding: 4px 0; border-top: 1px solid #222736; }
     input[type=range] { width: 60%; margin-top: 14px; accent-color: var(--accent); }
+    .head { display: flex; gap: 12px; align-items: center; justify-content: center; }
+    .logo { width: 48px; height: 48px; border-radius: 12px; object-fit: cover; display: none; }
+    .links { margin-top: 14px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+    .links a { color: var(--muted); font-size: 12px; text-decoration: none; border: 1px solid #262b38; border-radius: 99px; padding: 3px 10px; }
+    .links a:hover { color: var(--text); border-color: var(--accent); }
+    .powered { margin-top: 14px; font-size: 10px; color: #4b5266; letter-spacing: .08em; }
   </style>
 </head>
 <body>
   <div class="player">
-    <div class="station" id="station">Radio</div>
-    <div class="slogan" id="slogan"></div>
+    <div class="head"><img class="logo" id="logo" alt=""><div><div class="station" id="station">Radio</div><div class="slogan" id="slogan"></div></div></div>
     <div class="art" id="art">📻</div>
     <div class="title" id="title">—</div>
     <div class="artist" id="artist"></div>
@@ -33,6 +38,8 @@
     <div><button id="play" aria-label="Play">▶</button></div>
     <input type="range" id="vol" min="0" max="1" step="0.01" value="0.9" aria-label="Volume" />
     <div class="recent" id="recent"></div>
+    <div class="links" id="links"></div>
+    <div class="powered">POWERED BY VALHALLA</div>
   </div>
   <audio id="audio" preload="none"></audio>
   <script>
@@ -48,7 +55,22 @@
       try {
         const r = await (await fetch('/api/nowplaying')).json();
         document.title = `${r.station.name} — Listen Live`;
-        document.getElementById('station').textContent = `${r.station.name} ${r.station.frequency}`;
+        const st = r.station;
+        document.getElementById('station').textContent = st.frequency && !st.name.includes(st.frequency.replace(/\s*(FM|AM)$/i, '')) ? `${st.name} ${st.frequency}` : st.name;
+        const logo = document.getElementById('logo');
+        if (st.logo) { logo.src = st.logo; logo.style.display = 'block'; }
+        const so = st.socials || {};
+        const site = (u) => (/^https?:/.test(u) ? u : `https://${u}`);
+        const handle = (base, h) => (/^https?:/.test(h) ? h : `${base}${String(h).replace(/^@/, '')}`);
+        document.getElementById('links').innerHTML = [
+          st.website ? `<a href="${esc(site(st.website))}" target="_blank" rel="noopener">Website</a>` : '',
+          st.phone ? `<a href="tel:${esc(st.phone.replace(/[^\d+]/g, ''))}">Request line ${esc(st.phone)}</a>` : '',
+          so.instagram ? `<a href="${esc(handle('https://instagram.com/', so.instagram))}" target="_blank" rel="noopener">Instagram</a>` : '',
+          so.tiktok ? `<a href="${esc(handle('https://tiktok.com/@', so.tiktok))}" target="_blank" rel="noopener">TikTok</a>` : '',
+          so.x ? `<a href="${esc(handle('https://x.com/', so.x))}" target="_blank" rel="noopener">X</a>` : '',
+          so.facebook ? `<a href="${esc(handle('https://facebook.com/', so.facebook))}" target="_blank" rel="noopener">Facebook</a>` : '',
+          so.youtube ? `<a href="${esc(handle('https://youtube.com/@', so.youtube))}" target="_blank" rel="noopener">YouTube</a>` : '',
+        ].join('');
         document.getElementById('slogan').textContent = r.station.slogan;
         document.getElementById('live').textContent = r.onAir ? '● LIVE' : 'OFF AIR';
         const n = r.now;
@@ -56,6 +78,7 @@
         document.getElementById('artist').textContent = n?.type === 'music' ? n.artist : r.station.slogan;
         const art = document.getElementById('art');
         if (n?.type === 'music' && n.artwork) { art.style.backgroundImage = `url("${n.artwork}")`; art.textContent = ''; }
+        else if (st.logo) { art.style.backgroundImage = `url("${st.logo}")`; art.textContent = ''; }
         else if (!art.style.backgroundImage) art.textContent = '📻';
         if ('mediaSession' in navigator && n) navigator.mediaSession.metadata = new MediaMetadata({ title: n.title || r.station.name, artist: n.artist || '', artwork: n.artwork ? [{ src: n.artwork }] : [] });
         document.getElementById('recent').innerHTML = r.recent.length ? '<b>Recently played</b>' + r.recent.slice(1, 6).map((t) => `<div>${esc(t.artist)} — ${esc(t.title)}</div>`).join('') : '';

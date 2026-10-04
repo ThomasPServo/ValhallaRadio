@@ -24,6 +24,7 @@ test('imaging vetting: placeholders, station mention and legal ID rules', () => 
   assert.equal(vet({ type: 'sweeper', text: '{call_sign} plays the hits. {Name}.' }).piece.text, '{callSign} plays the hits. {name}.');
   assert.match(vet({ type: 'toh_id', text: '{callSign}, {market}. {frequency}, {name}.' }).why, /frequency twice/);
   assert.ok(vetPiece({ type: 'id', text: '{frequency}. {name}.' }, { station: { ...station, name: 'The Breeze' } }).ok);
+  assert.match(vetPiece({ type: 'id', text: '{frequency}. {name}.' }, { station: { ...station, name: 'Lone Star 98.7', frequency: '98.7 FM' } }).why, /frequency twice/);
 });
 
 test('imaging vetting: no ratings claims, contests, unverifiable promises or language', () => {

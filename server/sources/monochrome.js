@@ -135,24 +135,41 @@ export async function getArtist(id) {
  * Find the best monochrome match for a free-text "artist - title" suggestion
  * (used when Claude recommends songs that aren't in the library yet).
  */
+const normMatch = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  .replace(/\(.*?\)|\[.*?\]/g, '').replace(/\b(feat|ft)\.?.*$/, '').replace(/^the\s+/, '').replace(/[^a-z0-9]/g, '');
+
+/**
+ * How well a catalogue track matches a suggested song (0-100). Title and artist both have to match:
+ * a same-titled song by someone else is a different record.
+ */
+export function matchScore(want, got) {
+  const wantT = normMatch(want.title); const gotT = normMatch(got.title);
+  const wantA = normMatch(want.artist); const gotA = normMatch(got.artist);
+  if (!wantT || !gotT || !wantA || !gotA) return 0;
+  let title = 0; let artist = 0;
+  if (gotT === wantT) title = 60; else if (gotT.includes(wantT) || wantT.includes(gotT)) title = 35;
+  if (gotA === wantA) artist = 40;
+  else if (gotA.includes(wantA) || wantA.includes(gotA)) artist = 25;
+  else {
+    // "Ella Langley, Riley Green" vs "Riley Green": any credited artist counts
+    const parts = (s) => String(s || '').split(/,|&| and | x | with | feat\.? | ft\.? /i).map(normMatch).filter(Boolean);
+    if (parts(got.artist).some((a) => parts(want.artist).includes(a))) artist = 25;
+  }
+  if (!title || !artist) return 0;
+  let score = title + artist;
+  if (/remix|live|karaoke|instrumental|sped up|slowed|acoustic/i.test(got.title) && !/remix|live|acoustic/i.test(want.title)) score -= 30;
+  return score;
+}
+
 export async function resolveSuggestion({ artist, title }) {
   const results = await searchTracks(`${artist} ${title}`, 8);
-  const norm = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
-    .replace(/\(.*?\)|\[.*?\]/g, '').replace(/\b(feat|ft)\.?.*$/, '').replace(/[^a-z0-9]/g, '');
-  const wantT = norm(title);
-  const wantA = norm(artist);
   let best = null;
   let bestScore = 0;
   for (const t of results) {
-    let score = 0;
-    const gotT = norm(t.title);
-    const gotA = norm(t.artist);
-    if (gotT === wantT) score += 60; else if (gotT.includes(wantT) || wantT.includes(gotT)) score += 35;
-    if (gotA === wantA) score += 40; else if (gotA.includes(wantA) || wantA.includes(gotA)) score += 25;
-    if (/remix|live|karaoke|instrumental|sped up|slowed|acoustic/i.test(t.title) && !/remix|live|acoustic/i.test(title)) score -= 30;
+    const score = matchScore({ artist, title }, t);
     if (score > bestScore) { bestScore = score; best = t; }
   }
-  return bestScore >= 60 ? best : null;
+  return bestScore >= 75 ? best : null;
 }
 
 export function streamUrl(trackId) {
