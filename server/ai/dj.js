@@ -35,7 +35,9 @@ export function daypartFor(hour) {
 function describeTrack(t) {
   if (!t) return null;
   const album = t.compilation || /\b(hits|mix|playlist|collection|compilation|party)\b/i.test(t.album || '') ? '' : t.album; // never read a playlist title on air
-  return `"${t.title}" by ${t.artist}${t.year ? ` (${t.year}${album ? `, from ${album}` : ''})` : album ? ` (from ${album})` : ''}${t.note && t.note !== 'clean version' ? ` — music director note: ${t.note}` : ''}`;
+  const f = t.facts || {};
+  const info = [t.year || f.firstYear, f.genre, album ? `from ${album}` : ''].filter(Boolean).join(', ');
+  return `"${t.title}" by ${t.artist}${info ? ` (${info})` : ''}${t.note && t.note !== 'clean version' ? ` — music director note: ${t.note}` : ''}`;
 }
 
 function periodBrief(p) {
@@ -50,10 +52,10 @@ export function weatherBrief(w) {
   const u = w.units;
   const c = w.current || {};
   const parts = [
-    `${w.location} (${w.source || 'forecast'}): now ${c.temp}${u.temp}${c.feelsLike !== null && c.feelsLike !== c.temp ? ` (feels like ${c.feelsLike})` : ''}, ${c.conditions}${c.wind !== null ? `, wind ${c.wind} ${u.wind}` : ''}${c.gusts ? ` gusting ${c.gusts}` : ''}`,
+    `${w.location} (${w.source || 'forecast'}): now ${c.temp}${u.temp}${c.feelsLike !== null && c.feelsLike !== c.temp ? ` (feels like ${c.feelsLike})` : ''}, ${String(c.conditions || '').replace(/\//g, ' and ')}${c.wind === null || c.wind === undefined ? '' : c.wind < 2 ? ', calm winds' : `, wind ${c.wind} ${u.wind}`}${c.gusts ? ` gusting ${c.gusts}` : ''}`,
     periodBrief(w.today),
     periodBrief(w.tomorrow),
-    ...(w.forecast || []).slice(0, 2).map((f) => `official forecast, ${f.name}: ${f.text}`),
+    ...(w.forecast || []).slice(0, 2).map((f) => `official forecast, ${f.name}: ${String(f.text || '').replace(/\.\s*$/, '')}`),
     w.next12?.length ? `next hours: ${w.next12.filter((_, i) => i % 3 === 0).map((h) => `${h.time} ${h.temp}° ${h.conditions}${h.precipChance !== null && h.precipChance !== undefined ? ` ${h.precipChance}%` : ''}`).join('; ')}` : '',
     w.sunrise ? `sunrise ${w.sunrise}` : '',
     w.sunset ? `sunset ${w.sunset}` : '',

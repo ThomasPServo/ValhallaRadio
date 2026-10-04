@@ -76,7 +76,7 @@ function libRow(t) {
     <td><button class="icon" data-action="preview" data-id="${t.id}" title="Preview">▶</button></td>
     <td><div class="songcell"><div class="thumb" style="background-image:url('${esc(t.artwork || '')}')"></div><div style="min-width:0">
       <b>${esc(t.title)}</b> ${t.explicit ? '<span class="badge e" title="Explicit version">E</span>' : t.note === 'clean version' ? '<span class="badge clean" title="Swapped for the clean radio edit">clean</span>' : ''}
-      <div class="muted small">${esc(t.artist)}${t.year ? ` · ${t.year}` : ''}${t.album ? ` · ${esc(t.album)}` : ''}</div></div></div></td>
+      <div class="muted small">${esc(t.artist)}${t.year ? ` · ${t.year}` : ''}${t.facts?.genre ? ` · ${esc(t.facts.genre)}` : ''}${t.facts?.voice ? ` · ${esc(t.facts.voice)}` : ''}${t.facts?.popularity != null ? ` · <span title="Popularity (Deezer)">★${t.facts.popularity}</span>` : ''}${t.album ? ` · ${esc(t.album)}` : ''}</div></div></div></td>
     <td><select data-change="trackCat">${catOptions(t.category)}</select></td>
     <td>${introCell(t)}</td>
     <td>${end ? `<span class="badge ${end}">${end === 'cold' ? 'C' : 'F'}</span>` : '<span class="muted">—</span>'}</td>

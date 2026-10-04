@@ -8,6 +8,8 @@ import { candidatesFor, checkRules } from '../scheduler/rotation.js';
 import * as library from '../scheduler/library.js';
 import * as mono from '../sources/monochrome.js';
 import { weekdayName, spokenTime } from '../util/time.js';
+import { factLine, relatedArtists } from '../sources/songFacts.js';
+import { claudeProvider } from './claude.js';
 
 const log = (...a) => console.log('[music-director]', ...a);
 
@@ -57,11 +59,38 @@ const SUGGEST_SCHEMA = {
 };
 
 function fmtTrack(t, at) {
-  const hrs = t.lastPlayed ? Math.round((at - t.lastPlayed) / 3600_000) + 'h ago' : 'never';
-  const intro = t.markers?.intro ?? (t.lyrics?.status === 'found' ? t.lyrics.vocalStart : null);
-  const bpm = t.analysis?.headTempo?.confidence >= 0.8 ? Math.round(t.analysis.headTempo.bpm) : null;
-  const bits = [t.year, t.energy ? `energy ${t.energy}` : null, (t.tags || []).join('/') || null, intro != null ? `intro ${Math.round(intro)}s` : null, bpm ? `${bpm} bpm` : null, `last ${hrs}`].filter(Boolean);
-  return `${t.id} | ${t.artist} - ${t.title} (${bits.join(', ')})`;
+  return `${t.id} | ${t.artist} - ${t.title} (${factLine(t, { at })})`;
+}
+
+// ------------------------------------------------------------------ flow rules (no AI needed)
+
+const fx = (t) => t?.facts || {};
+const introOf = (t) => t?.markers?.intro ?? (t?.lyrics?.status === 'found' ? t.lyrics.vocalStart : null);
+const energyOf = (t) => t?.energy ?? fx(t).energy ?? null;
+const POST_BREAK = new Set(['spot', 'liner', 'id', 'toh_id', 'stopset']);
+
+/**
+ * Pick the best-flowing song from candidates already sorted most-due first: vary the voice and genre
+ * from the previous song, keep energy moving smoothly, put an instrumental intro after a DJ break and a
+ * familiar, high-energy song after a stopset or at the top of the hour.
+ */
+export function pickByFlow(cands, { prev = null, after = null, first = false, used = new Set() } = {}) {
+  let best = null; let bestScore = -Infinity;
+  cands.forEach((t, i) => {
+    if (used.has(t.id)) return;
+    let score = ((cands.length - i) / cands.length) * 4; // due-ness matters most
+    if (prev) {
+      if (t.artist === prev.artist) score -= 5;
+      if (fx(t).voice && fx(prev).voice && fx(t).voice !== fx(prev).voice) score += 1.2;
+      if (fx(t).genre && fx(prev).genre && fx(t).genre !== fx(prev).genre) score += 0.6;
+      const e1 = energyOf(prev); const e2 = energyOf(t);
+      if (e1 && e2 && Math.abs(e1 - e2) > 2) score -= 0.8;
+    }
+    if (after === 'dj') { const intro = introOf(t); score += intro >= 5 ? 1.5 : intro == null ? -0.3 : -0.8; }
+    if (first || POST_BREAK.has(after)) score += ((fx(t).popularity ?? 50) / 100) * 1.5 + ((energyOf(t) ?? 3) >= 4 ? 0.8 : 0);
+    if (score > bestScore) { bestScore = score; best = t; }
+  });
+  return best;
 }
 
 /**
@@ -79,7 +108,7 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
   const result = new Map();
   if (!slots.length) return result;
 
-  if (store.settings.allowDiscovery && claudeAvailable()) {
+  if (store.settings.allowDiscovery) {
     await topUpThinCategories(slots).catch((e) => log('discovery failed:', e.message));
   }
 
@@ -112,7 +141,8 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
       ].join('\n');
       const out = await claudeJson({
         system:
-          'You are the music director of a professional commercial radio station. You build each hour so it flows: ' +
+          'You are the music director of a professional commercial radio station. Judge every song only by the facts listed with it ' +
+          '(year, genre, vocal, tempo, energy, popularity, intro, ending, last play) — do not rely on your own memory of songs. You build each hour so it flows: ' +
           'vary tempo and energy in a pleasing arc, avoid two similar-sounding songs back to back, mix eras and male/female/group artists, ' +
           'open the hour strong, make songs after a stopset familiar and high-energy to win listeners back, and match the daypart mood. ' +
           'Right after a DJ break, prefer a song with an instrumental intro of 5+ seconds (intro shown in the list) so the DJ can talk up to the vocals. ' +
@@ -146,8 +176,9 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
       }
     }
     if (!chosen) {
-      chosen = candidatesFor(lib, ctx, 10).find((t) => !used.has(t.id)) || null;
-      why = chosen ? 'rotation rules' : '';
+      const prev = [...result.values()].at(-1)?.track || null;
+      chosen = pickByFlow(candidatesFor(lib, ctx, 12), { prev, after: s.after, first: s.slot === slots[0].slot, used });
+      why = chosen ? 'rotation rules + flow' : '';
     }
     if (!chosen) {
       // category empty: borrow from any category so there's never dead air
@@ -164,9 +195,90 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
   return result;
 }
 
-/** Ask Claude for songs that fit the format, resolve them on monochrome, add them to the library. */
+/**
+ * Find new music for a category. Two ways, combined:
+ *  - "ai": the AI suggests songs from its own knowledge; each is verified on monochrome (big models know music well).
+ *  - "catalog": real songs from artists related to the ones the station plays (open listener data), filtered to the
+ *    category's era and popularity; the AI only chooses among verified songs, so it can't invent anything.
+ * Auto uses the catalog for local models (which don't know music reliably) and to top up whatever the AI missed.
+ */
 export async function discover({ category = 'N', count = 10, guidance = '' } = {}) {
-  if (!claudeAvailable()) throw new Error('Music discovery needs an AI: sign in to Claude Code or Codex, start LM Studio, or add an API key (Settings → AI).');
+  const mode = store.settings.discoveryMode || 'auto';
+  const provider = claudeProvider();
+  const useAi = provider && mode !== 'catalog' && !(mode === 'auto' && provider === 'lmstudio');
+  let res = { added: [], missed: [] };
+  if (useAi) {
+    try { res = await discoverWithAi({ category, count, guidance }); } catch (err) { log('AI discovery failed:', err.message); }
+  }
+  if (res.added.length < count && mode !== 'ai') {
+    const more = await discoverFromCatalog({ category, count: count - res.added.length, guidance }).catch((err) => { log('catalog discovery failed:', err.message); return { added: [], missed: [] }; });
+    res = { added: [...res.added, ...more.added], missed: res.missed, catalog: more.added.length };
+  }
+  return res;
+}
+
+/** Era and popularity a category actually plays, from its current songs. */
+export function categoryProfile(categoryId, lib = store.data.library) {
+  const songs = lib.filter((t) => t.category === categoryId && !t.disabled);
+  const years = songs.map((t) => t.year).filter(Boolean).sort((a, b) => a - b);
+  const q = (p) => years[Math.min(years.length - 1, Math.floor(p * (years.length - 1)))];
+  const genres = {};
+  for (const t of songs) for (const g of t.facts?.genres || []) genres[g] = (genres[g] || 0) + 1;
+  return {
+    count: songs.length,
+    yearFrom: years.length >= 3 ? q(0.1) - 2 : null,
+    yearTo: years.length >= 3 ? q(0.9) + 2 : null,
+    genres: Object.entries(genres).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([g]) => g),
+    artists: [...new Set(songs.sort((a, b) => (b.plays || 0) - (a.plays || 0)).map((t) => t.artist.split(',')[0].trim()))],
+  };
+}
+
+export async function discoverFromCatalog({ category = 'N', count = 10, guidance = '' } = {}) {
+  const prof = categoryProfile(category);
+  const seeds = (prof.artists.length ? prof.artists : categoryProfile(null, store.data.library.map((t) => ({ ...t, category: null }))).artists).slice(0, 6);
+  if (!seeds.length) throw new Error('the library is empty: nothing to find related music from');
+  const have = new Set(store.data.library.map((t) => `${t.artist}|${t.title}`.toLowerCase()));
+  const pool = [];
+  for (const a of await relatedArtists(seeds, { perSeed: 3 })) {
+    try {
+      const res = await mono.search(a.name);
+      const artist = res.artists.find((x) => x.name.toLowerCase() === a.name.toLowerCase());
+      if (!artist) continue;
+      const info = await mono.getArtist(artist.id);
+      for (const [rank, t] of info.topTracks.slice(0, 6).entries()) {
+        if (have.has(`${t.artist}|${t.title}`.toLowerCase()) || t.duration < 110 || t.duration > 420 || /remix|live|acoustic|instrumental|sped up|slowed/i.test(t.title)) continue;
+        const year = library.originalYear(t);
+        if (prof.yearFrom && year && (year < prof.yearFrom || year > prof.yearTo)) continue;
+        if (library.cleanOnly() && t.explicit) continue; // addTrack would look for a clean twin, but keep the pool clean
+        pool.push({ ...t, year, rank, via: a.via });
+      }
+    } catch { /* skip this artist */ }
+    if (pool.length >= count * 4) break;
+  }
+  if (!pool.length) return { added: [], missed: [] };
+  let picks = pool.slice().sort((a, b) => a.rank - b.rank).slice(0, count).map((t) => ({ t, reason: `fits ${category}: similar to ${t.via}` }));
+  if (claudeAvailable() && pool.length > count) {
+    try {
+      const out = await claudeJson({
+        system: 'You are a radio music director. Choose only from the listed real songs, judging by the facts given.',
+        prompt: [`Format: ${store.station.format}`, `Category ${category}: ${prof.count} songs, years ${prof.yearFrom || '?'}-${prof.yearTo || '?'}, genres ${prof.genres.join(', ') || 'unknown'}.`, guidance ? `Direction: ${guidance}` : '',
+          `Choose the ${count} best fits:`, ...pool.map((t, i) => `${i} | ${t.artist} - ${t.title} (${t.year || '?'}, #${t.rank + 1} most popular for this artist, similar to ${t.via})`)].filter(Boolean).join('\n'),
+        maxTokens: 3000, effort: 'low',
+        schema: { type: 'object', additionalProperties: false, required: ['choices'], properties: { choices: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['index', 'reason'], properties: { index: { type: 'integer' }, reason: { type: 'string' } } } } } },
+      });
+      const chosen = (out.choices || []).filter((c) => pool[c.index]).slice(0, count).map((c) => ({ t: pool[c.index], reason: c.reason }));
+      if (chosen.length) picks = chosen;
+    } catch (err) { log('catalog ranking by AI failed, using popularity:', err.message); }
+  }
+  const added = []; const missed = [];
+  for (const { t, reason } of picks) {
+    try { added.push(await library.addTrack(t, category, { note: reason })); } catch (err) { missed.push(`${t.artist} - ${t.title} (${err.message})`); }
+  }
+  log(`catalog discovery: ${added.length} songs for ${category} from artists related to ${seeds.slice(0, 3).join(', ')}`);
+  return { added, missed };
+}
+
+async function discoverWithAi({ category = 'N', count = 10, guidance = '' } = {}) {
   const cats = store.data.categories.map((c) => `${c.id} = ${c.name}`).join(', ');
   const existing = store.data.library.slice(-300).map((t) => `${t.artist} - ${t.title}`).join('\n');
   const out = await claudeJson({

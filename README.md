@@ -73,7 +73,33 @@ The image includes ffmpeg and the Claude Code CLI (add `--build-arg INSTALL_CODE
 
 ### Music direction
 
-Claude picks every song for every hour from the eligible candidates in each clock slot, taking into account the daypart mood, what just played and the song's intro length (long intros after DJ breaks, for talk-ups). Each pick comes with a reason, shown in the log. Every pick must also pass artist and title separation, category rest and hourly artist caps; otherwise the rotation engine substitutes the most-due eligible song. When a category runs thin, Claude discovers new music on monochrome.
+Claude picks every song for every hour from the eligible candidates in each clock slot, taking into account the daypart mood, what just played and the song's intro length (long intros after DJ breaks, for talk-ups). Each pick comes with a reason, shown in the log. Every pick must also pass artist and title separation, category rest and hourly artist caps; otherwise the rotation engine substitutes the most-due eligible song.
+
+**Song facts, so any AI can program music it has never heard of.** Valhalla doesn't rely on a model's memory. In the background it looks up every library song in keyless open music data:
+
+| Fact | Source |
+|---|---|
+| Original release year | MusicBrainz, matched by ISRC (fixes compilation and reissue years) |
+| Genres | MusicBrainz and Deezer, with iTunes as a fallback |
+| Vocal type (male, female, group, duet) | MusicBrainz and Deezer |
+| Popularity (0–100) | Deezer |
+| Tempo | Deezer, or Valhalla's own analysis |
+
+Valhalla also estimates energy from tempo, loudness and genre. The AI sees each candidate as a fact line, for example `2003, alternative rock/indie rock, group vocal, 148 bpm uptempo, energy 5 (est), popularity 80, intro 8s, cold end, last 5h ago`, and is told to judge songs only by those facts.
+
+**Without any AI,** a flow-aware picker uses the same facts. It plays the most-due song, but:
+
+- never the same artist twice in a row;
+- varies vocals and genres;
+- avoids big energy jumps;
+- after the DJ, prefers songs with an intro to talk over;
+- after breaks, opens with familiar, high-energy songs.
+
+**Finding new music** (Settings → AI → *How new music is found*) when a category runs thin:
+
+- **AI suggestions:** the AI suggests songs, and each one is checked against the monochrome catalog.
+- **Catalog only:** Valhalla finds artists related to the ones the category already plays (from Deezer's listener graph), pulls their real catalog songs and keeps only songs in the category's era. An AI, if one is connected, then ranks those candidates; without one, Valhalla ranks them by popularity. Either way, the AI never has to recall a song from memory.
+- **Auto** (the default) uses AI suggestions with Claude or ChatGPT, catalog only with a local LM Studio model, and tops up from the catalog when suggestions come up short.
 
 **Clean versions only** (on by default): explicit songs are swapped for their clean radio edits. Songs that have no clean version are skipped and never air.
 
@@ -133,7 +159,7 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 |---|---|
 | **Studio** | Deck with countdowns (to vocals, talk left, remaining), a live waveform with vocal and mix markers, the multitrack segue timeline with gain automation, a back-timed drag-and-drop log, hour clock, hot carts, insert break, live read, program meters with gain reduction |
 | **Log** | Every hour with the music director's reasons; regenerate any hour |
-| **Library** | Search/filter, explicit and clean badges, intro, ending and BPM, the waveform marker editor, monochrome import (songs, albums, artist top tracks), Claude discovery, categories and rotation rules |
+| **Library** | Search/filter, explicit and clean badges, intro, ending and BPM, the waveform marker editor, monochrome import (songs, albums, artist top tracks), song facts (genre, vocal, popularity), AI and catalog discovery, categories and rotation rules |
 | **Clocks** | Hour-clock editor with a pie view and the paintable weekly grid |
 | **Engineering** | Presets, live processor controls, bypass, LUFS readouts and history, true peak, phase correlation, ⅓-octave spectrum, goniometer, per-band gain reduction, streaming deck buffers |
 | **DJs** | Dayparts and personas (style, voice, speed), with a sample break written and voiced on demand |

@@ -8,7 +8,7 @@
 //  3. Local traffic headlines from news RSS, plus any custom keyless feeds added in Settings.
 // The DJ prompt forbids inventing incidents, so with no data the DJ keeps traffic general.
 import { store } from '../store.js';
-import { getJson } from './http.js';
+import { getJson, placeQuery, US_STATES } from './http.js';
 import { fetchFeed } from './rss.js';
 import { parseWallTime, localIso } from '../util/time.js';
 
@@ -366,6 +366,8 @@ const NUMBERED_ROAD = /\b(I-?\s?\d+|Interstate \d+|U\.?S\.? \d+|US-?\d+|Highway 
 /** Keep only headlines that are actually about traffic in this market. */
 export function relevantHeadline(title, places) {
   if (!TRAFFIC_WORDS.test(title)) return false;
+  // a story that names another state is about somewhere else ("... in Thetford, Vermont")
+  if (US_STATES.some((st) => title.includes(st) && !places.includes(st))) return false;
   if (/\b(arrest|charged|convicted|sentenced|murder|shooting|lawsuit|trial|game|nfl|nba|stream)\b|air[- ]traffic/i.test(title)) return false;
   return NUMBERED_ROAD.test(title) || places.some((p) => p && title.toLowerCase().includes(p.toLowerCase()));
 }
@@ -375,7 +377,7 @@ async function headlines(locs, now) {
   const places = locs.flatMap((l) => [shortName(l).replace(/ County$/i, ''), l.state || '']);
   await Promise.all(locs.slice(0, 3).map(async (l) => {
     const name = shortName(l);
-    const items = await cached(`news:${name}`, 10 * MIN, () => fetchFeed(`https://news.google.com/rss/search?q=${encodeURIComponent(`"${name}" (traffic OR crash OR "road closed" OR closure) when:12h`)}&hl=en-US&gl=US&ceid=US:en`));
+    const items = await cached(`news:${name}`, 10 * MIN, () => fetchFeed(`https://news.google.com/rss/search?q=${encodeURIComponent(`${placeQuery(l)} (traffic OR crash OR "road closed" OR closure) when:12h`)}&hl=en-US&gl=US&ceid=US:en`));
     for (const i of items.slice(0, 6)) {
       if (i.published && now - i.published > 8 * HOUR) continue;
       const title = i.title.replace(/\s+-\s+[^-]+$/, ''); // drop " - Outlet Name"

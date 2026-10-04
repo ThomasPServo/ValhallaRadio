@@ -31,6 +31,7 @@ import { findCleanVersion } from './sources/clean.js';
 import { bedList, chosenBedId, bedUrl, bedFile } from './audio/beds.js';
 import { BED_STYLES } from './audio/bedSynth.js';
 import { createImaging, imagingJobStatus, imagingEvents, startAutoImaging } from './audio/imagingCreator.js';
+import { startEnricher, enrichStatus } from './scheduler/enricher.js';
 
 const scheduler = new Scheduler();
 const streamer = new Streamer();
@@ -124,6 +125,7 @@ function bootstrap() {
     processing: { ...d.processing, params: resolveParams(d.processing?.preset, d.processing?.overrides), presets: Object.fromEntries(Object.entries(PRESETS).map(([k, v]) => [k, { name: v.name, description: v.description }])) },
     libraryCount: d.library.length,
     explicitCount: d.library.filter((t) => t.explicit && !t.disabled).length,
+    songFacts: { ...enrichStatus },
     marketZones: marketZones(d.station),
     formats: formatList(),
     kokoroVoices: KOKORO_VOICES,
@@ -528,6 +530,7 @@ setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', e
 { const fixed = library.repairYears(); if (fixed) console.log(`[library] corrected the year of ${fixed} song(s) released on compilations`); }
 if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
 const imagingCheck = startAutoImaging();
+startEnricher(); // song facts (genre, original year, popularity, tempo, vocal) from open music data
 setupEvents.on('progress', (p) => { if (p.done) setTimeout(imagingCheck, 5000); }); // a new station's first fresh imaging, once its library is in
 
 server.listen(PORT, HOST, () => {

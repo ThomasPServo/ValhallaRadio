@@ -1,6 +1,7 @@
 // Local + national headlines from Google News RSS searches and any custom feeds.
 import { store } from '../store.js';
 import { fetchFeed } from './rss.js';
+import { placeQuery } from './http.js';
 
 let cache = { at: 0, key: '', data: null };
 
@@ -12,8 +13,9 @@ const cleanTitle = (t) => t.replace(/\s+-\s+[^-]+$/, ''); // strip " - Publisher
 
 export async function getNews() {
   const market = store.station.market || {};
-  const locs = (market.locations || []).map((l) => l.name.split(',')[0]);
-  const key = JSON.stringify([locs, store.settings.newsFeeds]);
+  const places = market.locations || [];
+  const locs = places.map((l) => l.name.split(',')[0]);
+  const key = JSON.stringify([places.map((l) => l.name), store.settings.newsFeeds]);
   if (cache.data && cache.key === key && Date.now() - cache.at < 15 * 60_000) return cache.data;
 
   const dedupe = (items) => {
@@ -28,9 +30,10 @@ export async function getNews() {
   const fresh = (i) => !i.published || Date.now() - i.published < 36 * 3600_000;
 
   const local = [];
-  for (const name of locs.slice(0, 5)) {
+  for (const l of places.slice(0, 5)) {
+    const name = l.name.split(',')[0];
     try {
-      const items = await fetchFeed(gnews(`"${name}" when:1d`));
+      const items = await fetchFeed(gnews(`${placeQuery(l)} when:1d`));
       local.push(...items.filter(fresh).slice(0, 6).map((i) => ({ ...i, title: cleanTitle(i.title), area: name })));
     } catch (e) { console.warn('[news]', name, e.message); }
   }

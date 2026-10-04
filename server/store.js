@@ -51,7 +51,8 @@ export function defaultDb() {
       lmstudioModel: '', // blank = the first model LM Studio has loaded
       useClaudeForMusic: true,
       cleanOnly: true, // broadcast-safe: explicit songs are swapped for clean radio edits or never aired
-      allowDiscovery: true, // let Claude pull new music from monochrome when the library runs thin
+      allowDiscovery: true, // let the AI pull new music from monochrome when the library runs thin
+      discoveryMode: 'auto', // auto | ai | catalog: how new songs are found (catalog = related artists from open data, no AI knowledge needed)
       monochromeBase: 'https://tracks.monochrome.st',
       // Voice: 'auto' = ElevenLabs if keyed, else the free local Kokoro voice, else OpenAI
       ttsProvider: 'auto',

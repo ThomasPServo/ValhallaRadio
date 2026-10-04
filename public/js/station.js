@@ -248,7 +248,9 @@ export const settings = {
           <p class="hint" style="margin:0">Load a capable instruct model (8B+ recommended) and start the server in LM Studio's Developer tab.</p>
         </div></details>
         ${check('useClaudeForMusic', 'The AI picks the music for each hour', s.useClaudeForMusic)}
-        ${check('allowDiscovery', 'Let the AI add new music when a category runs thin', s.allowDiscovery)}
+        ${check('allowDiscovery', 'Add new music new music when a category runs thin', s.allowDiscovery)}
+        ${select('discoveryMode', 'How new music is found', s.discoveryMode || 'auto', [['auto', 'Auto (AI suggestions, catalog for local models)'], ['ai', 'AI suggestions, checked against the catalog'], ['catalog', 'Catalog only: artists related to yours (no AI knowledge needed)']])}
+        <p class="hint" style="margin:0">Every song gets facts from open music data (genre, original year, popularity, tempo, vocal) so any AI, even a small local one, programs from facts rather than memory.${state.B.songFacts?.total ? ` ${state.B.songFacts.done} of ${state.B.songFacts.total} songs checked.` : ''}</p>
       </div>
       <div class="card stack">
         <h2>🎙️ Voice</h2>

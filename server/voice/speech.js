@@ -101,6 +101,8 @@ export function speakable(text, station = {}) {
   });
 
   // roads and named numbers: US 183, I-35, Highway 290, FM 1825, Room 101
+  s = s.replace(/\b(Rte|Hwy|Rt)\.\s?(?=\d)/g, (_, r) => `${r} `); // "Rte. 24" reads like "Route 24"
+  s = s.replace(/\bRte\b(?=\s\d)/g, 'Route').replace(/\bRt\b(?=\s\d)/g, 'Route').replace(/\bHwy\b(?=\s\d)/g, 'Highway');
   s = s.replace(new RegExp(`\\b(${ROAD})([\\s-]?)(\\d{1,4})\\b`, 'g'), (_, road, sep, n) => {
     const r = /^(I|IH|US|SH|FM|RM|CR|SR|TX)$/.test(road) ? spell(road) : road;
     return `${r} ${identifier(Number(n))}`;
