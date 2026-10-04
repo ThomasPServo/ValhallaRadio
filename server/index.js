@@ -251,7 +251,22 @@ app.get('/api/monochrome/search', wrap(async (req, res) => res.json(await mono.s
 app.get('/api/monochrome/tracks', wrap(async (req, res) => res.json(await mono.searchTracks(req.query.q, Number(req.query.limit) || 25))));
 app.get('/api/monochrome/artist/:id', wrap(async (req, res) => res.json(await mono.getArtist(req.params.id))));
 app.get('/api/monochrome/release/:id', wrap(async (req, res) => res.json(await mono.getRelease(req.params.id))));
-app.get('/api/monochrome/stream/:id', (req, res) => res.redirect(mono.streamUrl(req.params.id)));
+// Song previews in the studio: from the cache, or from a chunked fetch as it fills (one direct connection to the origin is too slow for FLAC)
+app.get('/api/monochrome/stream/:id', wrap(async (req, res) => {
+  const id = String(req.params.id).replace(/[^\w-]/g, '');
+  if (mono.isCached(id)) return res.type('audio/flac').sendFile(mono.cachedPath(id));
+  const f = mono.fetchTrack(id, { priority: 100 });
+  res.type('audio/flac');
+  let gone = false;
+  req.on('close', () => { gone = true; });
+  try {
+    for await (const chunk of f.read(0)) {
+      if (gone) break;
+      if (!res.write(chunk)) await new Promise((r) => { res.once('drain', r); res.once('close', r); });
+    }
+    res.end();
+  } catch { res.destroy(); }
+}));
 
 app.get('/api/library', (req, res) => {
   const q = String(req.query.q || '').toLowerCase();
@@ -594,6 +609,7 @@ setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', e
 { const fixed = library.repairYears(); if (fixed) console.log(`[library] corrected the year of ${fixed} song(s) released on compilations`); }
 if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
 const imagingCheck = startAutoImaging();
+mono.startCacheWarmer(() => library.playable()); // fill the cache with the library while nothing urgent is fetching
 startChartWatch(); // this station's charts: chart positions, peaks and chart-driven rotation
 startEnricher(); // song facts (genre, original year, popularity, tempo, vocal) from open music data
 setupEvents.on('progress', (p) => { if (p.done) setTimeout(imagingCheck, 5000); }); // a new station's first fresh imaging, once its library is in

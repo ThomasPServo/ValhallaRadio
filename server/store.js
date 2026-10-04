@@ -81,8 +81,10 @@ export function defaultDb() {
       // Auto-sweeper creator: fresh imaging written and produced every `everyDays`, newest `keep` stay in rotation
       autoImaging: { enabled: true, everyDays: 7, perRun: 6, keep: 18, lastRun: 0 },
       // Audio sourcing: stream songs; download only when streaming fails
-      downloadFallback: true,
-      musicCacheMaxMb: 2048,
+      monochromeConnections: 6, // parallel connections to the stream origin (it refuses bursts of 16+)
+      warmCache: true, // fetch the rest of the library into the cache in the background, power rotation first
+      prefetchSongs: 10, // songs coming up in the log that are fetched into the cache ahead of air
+      musicCacheMaxMb: 8192, // lossless songs are ~25-40 MB each; every cached song airs without touching the origin
     },
     stream: {
       bitrate: 128,
@@ -240,6 +242,8 @@ class Store {
     if (process.env.LMSTUDIO_URL) s.lmstudioUrl = process.env.LMSTUDIO_URL;
     // Sonnet is the default Claude model now; stations still on the old default move over once
     if (!s.aiDefaultsV2) { if (s.claudeModel === 'claude-opus-5-5') s.claudeModel = 'claude-sonnet-5-5'; s.aiDefaultsV2 = true; }
+    // songs are fetched into the cache now (the origin is too slow to stream lossless live): a bigger default cache, once
+    if (!s.cacheV2) { if (!s.musicCacheMaxMb || s.musicCacheMaxMb === 2048) s.musicCacheMaxMb = 8192; delete s.downloadFallback; s.cacheV2 = true; }
     if (!s.elevenLabsApiKey && process.env.ELEVENLABS_API_KEY) s.elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
     if (!s.openaiApiKey && process.env.OPENAI_API_KEY) s.openaiApiKey = process.env.OPENAI_API_KEY;
     delete s.tomtomApiKey; // traffic is keyless now

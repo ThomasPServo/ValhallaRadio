@@ -232,7 +232,7 @@ const TABBODY = {
 export const library = {
   render: () => `
     <h1>Music library</h1>
-    <p class="sub">${state.B.libraryCount} songs, streamed from monochrome in lossless quality (downloaded only if streaming fails). Intros, endings and tempo are analysed as songs play.</p>
+    <p class="sub">${state.B.libraryCount} songs, from monochrome in lossless quality, fetched into the cache ahead of air. Intros, endings and tempo are analysed as songs play.</p>
     <div class="tabs">${TABS.map(([k, l]) => `<button class="${ui.tab === k ? 'active' : ''}" data-action="tab" data-tab="${k}">${l}</button>`).join('')}</div>
     <div id="libBody">${TABBODY[ui.tab]()}</div>`,
   mount() {

@@ -303,12 +303,14 @@ export class Scheduler {
   }
 
   /** Replace a music item whose audio failed with another track from the same category. */
-  replaceMusic(it) {
+  /** Swap a song that can't air for another due one from its category (`prefer`: e.g. already cached first). */
+  replaceMusic(it, prefer = null) {
     const failed = new Set([...(it.failedIds || []), it.trackId]);
     const category = store.data.categories.find((c) => c.id === it.category) || { id: it.category };
     const usedIds = new Set(this.allItems().filter((i) => i.trackId).map((i) => i.trackId));
-    const t = candidatesFor(library.playable(), { at: Date.now(), plays: library.musicPlays(), rotation: store.data.rotation, category }, 20)
-      .find((x) => !failed.has(x.id) && !usedIds.has(x.id));
+    const cands = candidatesFor(library.playable(), { at: Date.now(), plays: library.musicPlays(), rotation: store.data.rotation, category }, 20)
+      .filter((x) => !failed.has(x.id) && !usedIds.has(x.id));
+    const t = (prefer && cands.find(prefer)) || cands[0];
     it.failedIds = [...failed];
     if (!t || it.failedIds.length > 3) {
       it.status = 'failed';

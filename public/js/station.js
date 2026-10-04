@@ -287,7 +287,9 @@ export const settings = {
         ${check('production.infoBeds', 'News, weather and traffic get their own sounder and bed', s.production?.infoBeds !== false)}
         <p class="hint" style="margin:0">Auto-bed under DJ talk and the sweeper creator live on the Imaging page.</p>
         <h2 style="margin-top:8px">📡 Sources &amp; data</h2>
-        ${check('downloadFallback', 'Download a song only if streaming it fails', s.downloadFallback !== false)}
+        <div class="grid cols-2">${input('monochromeConnections', 'Parallel connections to monochrome', s.monochromeConnections ?? 6, 'number', 'min="1" max="12"')}${input('prefetchSongs', 'Songs fetched ahead of air', s.prefetchSongs ?? 10, 'number', 'min="0" max="40"')}</div>
+        ${check('warmCache', 'Fill the cache with the whole library in the background (power rotation first)', s.warmCache !== false)}
+        <p class="hint" style="margin:0">monochrome sends each connection slowly and cuts it after ~30 seconds, so songs arrive in small chunks over several connections, starting well before they air. More than 8 connections tends to get refused. Every song in the cache airs instantly, so a bigger cache means less waiting.</p>
         <div class="grid cols-2">${input('monochromeBase', 'monochrome API', s.monochromeBase)}${input('musicCacheMaxMb', 'Download cache limit (MB)', s.musicCacheMaxMb, 'number')}</div>
         <div><label>Extra news RSS feeds (one per line)</label><textarea data-k="newsFeeds" data-list="1" rows="2">${esc((s.newsFeeds || []).join('\n'))}</textarea></div>
         <div><label>Extra traffic feeds — RSS or WZDx GeoJSON, no keys (one per line)</label><textarea data-k="trafficFeeds" data-list="1" rows="2">${esc((s.trafficFeeds || []).map((f) => (typeof f === 'string' ? f : f.url)).join('\n'))}</textarea></div>

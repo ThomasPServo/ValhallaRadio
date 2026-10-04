@@ -1,10 +1,10 @@
-// Streaming decoder for songs: no full downloads.
+// Streaming decoder for songs.
 //
-// A resumable HTTP fetch (Range requests survive the origin's occasional 52x errors and dropped
-// connections) is piped into ffmpeg, which decodes to 44.1 kHz stereo s16 PCM. Decoding runs a
-// bounded distance ahead of the playhead; when the buffer is full ffmpeg's stdout is paused, the
-// pipe fills, and backpressure propagates all the way to the TCP socket. Only the audio we play is
-// ever fetched, once.
+// Audio comes from a local file, from a chunked fetch that is still filling the music cache (`source`:
+// playback starts on the first bytes while parallel connections fetch the rest), or from a single
+// resumable HTTP fetch (`url`). It is piped into ffmpeg, which decodes to 44.1 kHz stereo s16 PCM.
+// Decoding runs a bounded distance ahead of the playhead; when the buffer is full ffmpeg's stdout is
+// paused and backpressure propagates back to the reader.
 //
 // While decoding we also build the waveform overview (peaks) and measure K-weighted loudness, so
 // analysis needs no extra network traffic.
@@ -23,11 +23,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class StreamDecoder extends EventEmitter {
   /**
-   * @param {{url?: string, file?: string, label?: string, maxAheadSec?: number, keepBehindSec?: number, durationHint?: number}} o
+   * @param {{url?: string, file?: string, source?: import('../sources/fetcher.js').TrackFetch, label?: string, maxAheadSec?: number, keepBehindSec?: number, durationHint?: number}} o
    */
   constructor(o) {
     super();
     this.url = o.url;
+    this.source = o.source || null;
     this.file = o.file;
     this.label = o.label || o.url || o.file;
     this.maxAhead = Math.round((o.maxAheadSec ?? 75) * SR);
@@ -71,9 +72,24 @@ export class StreamDecoder extends EventEmitter {
     });
     if (!this.file) {
       this.proc.stdin.on('error', () => {});
-      this._pump();
+      if (this.source) this._pumpSource(); else this._pump();
     }
     return this;
+  }
+
+  /** Feed ffmpeg from a chunked fetch as its bytes arrive. */
+  async _pumpSource() {
+    try {
+      for await (const chunk of this.source.read(0)) {
+        if (this.closed) return;
+        this.totalBytes = this.source.total;
+        this.bytes += chunk.length;
+        if (!this.proc.stdin.write(chunk)) await Promise.race([once(this.proc.stdin, 'drain'), once(this.proc, 'close')]);
+      }
+      if (!this.closed) this.proc.stdin.end();
+    } catch (err) {
+      if (!this.closed) this._fail(new Error(`stream failed: ${err.message}`));
+    }
   }
 
   async _pump() {
@@ -278,7 +294,7 @@ export class StreamDecoder extends EventEmitter {
       mb: Math.round((this.bytes / 1048576) * 10) / 10,
       totalMb: this.totalBytes ? Math.round((this.totalBytes / 1048576) * 10) / 10 : null,
       retries: this.retries,
-      source: this.file ? 'local' : 'stream',
+      source: this.file ? 'local' : this.source ? 'chunked' : 'stream',
       memMb: Math.round((this.chunks.reduce((s, c) => s + c.data.byteLength, 0) / 1048576) * 10) / 10,
     };
   }

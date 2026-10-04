@@ -76,7 +76,7 @@ export function render() {
     <p class="hint">Changes apply live to the air chain. Highlighted controls differ from the preset.</p>
   </div>
   <div class="grid cols-2" style="margin-top:14px">
-    <div class="card"><h2>Decks · streaming buffers</h2><div id="decks"></div><p class="hint">Songs stream and decode just ahead of air; nothing is downloaded unless streaming fails.</p></div>
+    <div class="card"><h2>Decks · streaming buffers</h2><div id="decks"></div><p class="hint">Songs decode just ahead of air, from the cache or straight from a fetch that's still arriving.</p><div id="fetcher"></div></div>
     <div class="card"><h2>Air chain status</h2><div id="chain" class="kv"></div></div>
   </div>`;
 }
@@ -115,6 +115,13 @@ function decks() {
   el.innerHTML = d.length ? d.map((x) => `<div class="deckrow"><div style="min-width:0"><b class="small">${x.playing ? '▶ ' : ''}${esc(x.title || x.label || '')}</b><div class="small muted">${esc(x.source)} · ${x.mb}${x.totalMb ? `/${x.totalMb}` : ''} MB · ${x.memMb} MB in memory${x.retries ? ` · ${x.retries} resumes` : ''}${x.underrun ? ' · <b style="color:var(--red)">UNDERRUN</b>' : ''}</div></div>
     <div class="bufbar" title="Decoded ahead of the play head"><i style="width:${Math.min(100, (x.aheadSec / 75) * 100)}%;background:${x.aheadSec < 5 && !x.ended ? 'var(--red)' : 'var(--green)'}"></i></div>
     <span class="num small">${x.ended ? 'all' : `${x.aheadSec.toFixed(0)}s`} ahead</span><span class="num small muted">${x.decodedSec.toFixed(0)}s</span></div>`).join('') : '<div class="muted small">No songs loaded. Decks appear here when the station is on air.</div>';
+  const fx = state.S.fetcher;
+  const fe = $('#fetcher');
+  if (fe && fx) {
+    const kb = (n) => `${Math.round(n / 1024)} KB/s`;
+    fe.innerHTML = `<div class="small" style="margin-top:8px"><b>Fetching from monochrome</b> · ${fx.connections}/${fx.limit} connections (max ${fx.max}) · ${kb(fx.rate)}${fx.throttled ? ` · origin refused ${fx.throttled}×, eased off` : ''}</div>
+      ${fx.songs.slice(0, 8).map((f) => { const t = state.LOG.flatMap((l) => l.items).find((i) => String(i.trackId) === f.key); const pct = f.total ? Math.round((100 * f.received) / f.total) : 0; return `<div class="deckrow"><div style="min-width:0" class="small">${esc(t ? `${t.artist} - ${t.title}` : `track ${f.key}`)}<div class="muted">${f.total ? `${(f.received / 1048576).toFixed(1)}/${(f.total / 1048576).toFixed(1)} MB` : 'starting'}${f.rate ? ` · ${kb(f.rate)}` : ''}${f.eta != null && f.total ? ` · ~${Math.ceil(f.eta / 60)} min left` : ''}</div></div><div class="bufbar"><i style="width:${pct}%"></i></div><span class="num small">${pct}%</span><span class="num small muted">#${f.priority}</span></div>`; }).join('') || '<div class="small muted">All upcoming songs are in the cache.</div>'}`;
+  }
   const S = state.S; const B = state.B;
   const ab = B.settings.autoBed || {};
   $('#chain').innerHTML = `

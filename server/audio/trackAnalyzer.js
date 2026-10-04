@@ -20,8 +20,9 @@ export function analyzeTrack(id) {
   const job = (async () => {
     const t = library.findTrack(id);
     if (!t) throw new Error('unknown track');
-    const local = fs.existsSync(mono.cachedPath(id)) ? mono.cachedPath(id) : null;
-    const d = new StreamDecoder({ url: local ? undefined : mono.streamUrl(id), file: local || undefined, durationHint: t.duration, maxAheadSec: 1200, keepBehindSec: 1200, label: `analyze ${t.title}` }).start();
+    const fetch = mono.fetchTrack(id, { priority: 2000 }); // behind anything that's going to air
+    const local = fetch ? null : mono.cachedPath(id);
+    const d = new StreamDecoder({ file: local || undefined, source: fetch || undefined, durationHint: t.duration, maxAheadSec: 1200, keepBehindSec: 1200, label: `analyze ${t.title}` }).start();
     try {
       await new Promise((resolve, reject) => {
         d.on('end', resolve);

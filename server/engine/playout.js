@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import { SAMPLE_RATE as SR, CACHE_DIR } from '../config.js';
 import { store } from '../store.js';
 import * as mono from '../sources/monochrome.js';
+import { setPriority, dropFetches, fetcherStatus } from '../sources/fetcher.js';
 import * as library from '../scheduler/library.js';
 import { KIND, estDuration } from '../scheduler/logs.js';
 import { loadAudio } from './audio.js';
@@ -469,12 +470,30 @@ export class Playout extends EventEmitter {
     // songs and spoken elements prepare in separate lanes, so a slow voice render never holds up music
     const busy = { music: 0, other: 0 };
     for (const id of this.preparing) busy[this.scheduler.findItem(id)?.type === 'music' ? 'music' : 'other']++;
+    this.prefetch();
     for (const it of upcoming) {
       const lane = it.type === 'music' ? 'music' : 'other';
       if (it.status !== 'scheduled' || this.preparing.has(it.id) || busy[lane] >= 2) continue;
       busy[lane]++;
       this.prepare(it);
     }
+  }
+
+  /** Fetch the songs coming up in the log into the cache, in airplay order, well before they air. */
+  prefetch() {
+    const ahead = Math.max(0, Number(store.settings.prefetchSongs ?? 10));
+    const songs = this.scheduler.pendingItems().filter((i) => i.type === 'music' && i.trackId);
+    const keep = new Set();
+    let n = 0;
+    for (const it of songs) {
+      if (n >= ahead) break;
+      if (mono.isCached(it.trackId)) continue;
+      n++;
+      keep.add(String(it.trackId));
+      const f = mono.fetchTrack(it.trackId, { priority: this.preparing.has(it.id) ? 0 : n });
+      if (f && !this.preparing.has(it.id)) setPriority(String(it.trackId), n);
+    }
+    dropFetches(keep);
   }
 
   releasePrep(it) {
@@ -500,7 +519,7 @@ export class Playout extends EventEmitter {
       item.error = err.message;
       if (item.type === 'music') {
         log(`music failed (${item.title}): ${err.message} — replacing`);
-        if (!this.scheduler.replaceMusic(item)) this.fail(err);
+        if (!this.scheduler.replaceMusic(item, (t) => mono.isCached(t.id))) this.fail(err); // a song already in the cache is ready at once
       } else {
         log(`skipping [${item.type}] ${item.title}: ${err.message}`);
         item.status = 'skipped';
@@ -516,20 +535,19 @@ export class Playout extends EventEmitter {
     if (library.cleanOnly() && track.explicit) throw new Error('explicit version blocked (clean versions only)');
     const cached = track.analysis?.v === ANALYSIS_VERSION ? track.analysis : null;
     const lyricsP = this.lyricsFor(track).catch(() => null);
-    const local = fs.existsSync(mono.cachedPath(track.id)) ? mono.cachedPath(track.id) : null;
-    const open = (file) => new StreamDecoder({
-      url: file ? undefined : mono.streamUrl(track.id), file: file || undefined, durationHint: track.duration,
+    // from the cache, or from a chunked fetch that is filling the cache (playback starts on its first bytes)
+    const fetch = mono.fetchTrack(track.id, { priority: 0 });
+    const local = fetch ? null : mono.cachedPath(track.id);
+    const decoder = new StreamDecoder({
+      file: local || undefined, source: fetch || undefined, durationHint: track.duration,
       maxAheadSec: 75, keepBehindSec: 45, label: `${track.artist} - ${track.title}`,
     }).start();
-    let decoder = open(local);
     try {
-      await this.preroll(decoder, track);
+      await this.preroll(decoder, track, fetch ? 240_000 : 45_000);
+      if (fetch) await this.fetchInTime(fetch, track);
     } catch (err) {
       decoder.close();
-      if (local || store.settings.downloadFallback === false) throw err;
-      log(`stream failed for ${track.title} (${err.message}); downloading as a fallback`);
-      decoder = open(await mono.download(track.id));
-      await this.preroll(decoder, track);
+      throw err;
     }
     const head = cached ? null : await analyze('head', decoder.range(0, Math.round(HEAD_SEC * SR)));
     const lyrics = await Promise.race([lyricsP, sleep(4000).then(() => null)]);
@@ -543,10 +561,26 @@ export class Playout extends EventEmitter {
     return prep;
   }
 
-  preroll(decoder, track) {
+  /**
+   * A song still being fetched airs only if the rest will arrive before playback gets there: the whole
+   * file must be in within ~85% of the song's length at the current rate (prefetching usually means
+   * it's long done). Waits up to 4 minutes for that, then gives up so the song can be replaced.
+   */
+  async fetchInTime(fetch, track) {
+    const dur = track.duration || 200;
+    const until = Date.now() + 240_000;
+    while (!fetch.finished) {
+      if (fetch.eta() <= dur * 0.85 - 5) return;
+      if (Date.now() > until) throw new Error(`download too slow (${Math.round(fetch.rate.perSec() / 1024)} KB/s, ${Math.round(fetch.eta())}s to go)`);
+      await sleep(2000);
+    }
+    if (fetch.error) throw fetch.error;
+  }
+
+  preroll(decoder, track, timeoutMs = 45_000) {
     const need = Math.round(Math.min(HEAD_SEC, Math.max(5, (track.duration || 200) - 2)) * SR);
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => (decoder.decoded > SR * 12 ? resolve() : reject(new Error('stream too slow'))), 45_000);
+      const timer = setTimeout(() => (decoder.decoded > SR * 12 ? resolve() : reject(new Error('stream too slow'))), timeoutMs);
       const check = () => {
         if (decoder.error) { clearTimeout(timer); reject(decoder.error); }
         else if (decoder.decoded >= need || decoder.ended) { clearTimeout(timer); resolve(); }
@@ -752,6 +786,7 @@ export class Playout extends EventEmitter {
       deadAir: this.running && !this.sources.some((s) => !s.done && !s.overlay),
       lastError: this.lastError,
       decks: this.deckStats(),
+      fetcher: fetcherStatus(),
       bed: { on: Boolean(this.bed?.on), name: this.bedAudio?.name || null, ready: Boolean(this.bedAudio) },
       processing: { preset: this.processor.p.preset, bypass: this.processor.p.bypass, loudness: this.processor.loudness() },
       wall: Date.now(),

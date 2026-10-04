@@ -7,14 +7,14 @@
 //   GET /search/artists?q=&limit=  artist search
 //   GET /releases/:id              release + tracklist
 //   GET /artists/:id               artist profile + topTracks
-//   GET /track/:id                 lossless audio stream (FLAC), supports HTTP ranges
-//
-// Fallback: a hifi-api style instance (api.monochrome.tf) which returns base64 manifests.
+//   GET /track/:id                 lossless audio (FLAC), supports HTTP ranges. Slow and cut after ~30 s
+//                                  per connection, so songs are fetched in parallel chunks (fetcher.js).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { MUSIC_CACHE_DIR } from '../config.js';
 import { store } from '../store.js';
+import { getFetch, activeFetch, fetcherStatus, BACKGROUND } from './fetcher.js';
 
 const UA = 'ValhallaRadio/0.1 (+radio automation)';
 
@@ -180,69 +180,78 @@ export function cachedPath(trackId) {
   return path.join(MUSIC_CACHE_DIR, `${String(trackId).replace(/[^\w-]/g, '')}.audio`);
 }
 
-const inflight = new Map();
-
 /**
- * Download a track to the local cache. The upstream origin is occasionally flaky
- * (Cloudflare 52x, truncated transfers), so this resumes with HTTP Range requests.
+ * Fetch a song into the local cache: small Range chunks over a shared pool of parallel connections,
+ * resumed across dropped connections and restarts (see fetcher.js for why one connection can't keep up).
+ * A lower priority number is fetched first (0 = needed now).
+ * @returns {import('./fetcher.js').TrackFetch | null} null when the song is already cached
  */
-export function download(trackId, { attempts = 6 } = {}) {
+export function fetchTrack(trackId, { priority = 1000 } = {}) {
+  const final = cachedPath(trackId);
+  if (fs.existsSync(final) && fs.statSync(final).size > 10000) return null;
+  const f = getFetch(String(trackId), streamUrl(trackId), final, { priority });
+  if (!f._pruneHooked) { f._pruneHooked = true; f.done.then(() => pruneCache(), () => {}); }
+  return f;
+}
+
+/** Download a track to the local cache; resolves with its path. */
+export async function download(trackId, { priority = 500 } = {}) {
   const final = cachedPath(trackId);
   if (fs.existsSync(final) && fs.statSync(final).size > 10000) {
     const now = new Date();
     fs.utimesSync(final, now, now);
-    return Promise.resolve(final);
-  }
-  if (inflight.has(trackId)) return inflight.get(trackId);
-
-  const job = (async () => {
-    const part = final + '.part';
-    let total = null;
-    let lastErr = null;
-    for (let i = 0; i < attempts; i++) {
-      const have = fs.existsSync(part) ? fs.statSync(part).size : 0;
-      if (total && have >= total) break;
-      try {
-        const headers = { 'User-Agent': UA };
-        if (have > 0) headers.Range = `bytes=${have}-`;
-        const res = await fetch(streamUrl(trackId), { headers, signal: AbortSignal.timeout(120000) });
-        if (!(res.status === 200 || res.status === 206)) throw new Error(`HTTP ${res.status}`);
-        const type = res.headers.get('content-type') || '';
-        if (type.startsWith('text/')) throw new Error(`unexpected ${type}`);
-        if (res.status === 200 && have > 0) fs.truncateSync(part, 0); // server ignored Range
-        const len = Number(res.headers.get('content-length') || 0);
-        const range = res.headers.get('content-range');
-        if (range && /\/(\d+)$/.test(range)) total = Number(range.match(/\/(\d+)$/)[1]);
-        else if (res.status === 200 && len) total = len;
-        const out = fs.createWriteStream(part, { flags: res.status === 206 ? 'a' : 'w' });
-        for await (const chunk of res.body) {
-          if (!out.write(chunk)) await new Promise((r) => out.once('drain', r));
-        }
-        await new Promise((r, j) => out.end((e) => (e ? j(e) : r())));
-        const size = fs.statSync(part).size;
-        if (!total || size >= total) break;
-      } catch (err) {
-        lastErr = err;
-        await sleep(Math.min(8000, 500 * 2 ** i));
-      }
-    }
-    const size = fs.existsSync(part) ? fs.statSync(part).size : 0;
-    if (size < 10000 || (total && size < total)) {
-      throw new Error(`download failed for ${trackId}: ${lastErr?.message || 'incomplete'}`);
-    }
-    fs.renameSync(part, final);
-    pruneCache();
     return final;
-  })().finally(() => inflight.delete(trackId));
+  }
+  const f = fetchTrack(trackId, { priority });
+  f.wanted = true;
+  try { return await f.done; } catch (err) { throw new Error(`download failed for ${trackId}: ${err.message}`); }
+}
 
-  inflight.set(trackId, job);
-  return job;
+export function isCached(trackId) {
+  const p = cachedPath(trackId);
+  return fs.existsSync(p) && fs.statSync(p).size > 10000;
+}
+
+/** Bytes the finished songs in the cache take. */
+export function cacheBytes() {
+  try {
+    return fs.readdirSync(MUSIC_CACHE_DIR).filter((f) => f.endsWith('.audio')).reduce((s, f) => s + fs.statSync(path.join(MUSIC_CACHE_DIR, f)).size, 0);
+  } catch { return 0; }
+}
+
+/**
+ * Warm the cache with the library while nothing urgent is fetching: one song at a time, power rotation
+ * first, at the lowest priority, until the cache is 90% full. Rotation repeats songs, so once the
+ * rotation is cached the station barely needs the (slow) origin at all.
+ */
+export function startCacheWarmer(songs, { everyMs = 30_000 } = {}) {
+  const order = ['A', 'B', 'N', 'C', 'G'];
+  const tick = () => {
+    if (store.settings.warmCache === false) return;
+    const st = fetcherStatus();
+    if (st.songs.some((s) => s.priority >= BACKGROUND) || st.songs.length >= 3) return; // busy, or already warming one
+    if (cacheBytes() > (store.settings.musicCacheMaxMb || 8192) * 1048576 * 0.9) return;
+    const next = songs()
+      .filter((t) => !isCached(t.id))
+      .sort((a, b) => ((order.indexOf(a.category) + 1) || 9) - ((order.indexOf(b.category) + 1) || 9) || (b.plays || 0) - (a.plays || 0))[0];
+    if (next) fetchTrack(next.id, { priority: BACKGROUND });
+  };
+  const timer = setInterval(tick, everyMs);
+  timer.unref?.();
+  return tick;
 }
 
 /** Keep the music cache under the configured size, evicting least-recently used files. */
 export function pruneCache() {
   try {
     const maxBytes = (store.settings.musicCacheMaxMb || 4096) * 1024 * 1024;
+    // partial fetches nobody has touched for two days (a song dropped from the log) are cleared
+    for (const f of fs.readdirSync(MUSIC_CACHE_DIR).filter((x) => x.endsWith('.audio.part'))) {
+      const p = path.join(MUSIC_CACHE_DIR, f);
+      if (activeFetch(f.replace(/\.audio\.part$/, '')) || Date.now() - fs.statSync(p).mtimeMs < 2 * 86400_000) continue;
+      fs.rmSync(p, { force: true });
+      fs.rmSync(`${p}.json`, { force: true });
+    }
     const files = fs.readdirSync(MUSIC_CACHE_DIR)
       .filter((f) => f.endsWith('.audio'))
       .map((f) => {

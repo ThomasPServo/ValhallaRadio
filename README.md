@@ -10,7 +10,7 @@ Radio automation for the AI era: a complete station in a box. Name your station,
 |---|---|
 | AI | A subscription you already have: **Claude Code** (`claude`, Claude Sonnet 5.5 by default) or **ChatGPT via Codex** (`codex`). Or fully offline on a local model in **LM Studio**. Anthropic and OpenAI API keys are optional. |
 | Voice | A free **local neural voice** (Kokoro), installed on demand from the studio. ElevenLabs/OpenAI are optional. |
-| Music | **[monochrome](https://github.com/monochrome-music/monochrome)** (`tracks.monochrome.st`), streamed losslessly. Songs are downloaded only when streaming fails. |
+| Music | **[monochrome](https://github.com/monochrome-music/monochrome)** (`tracks.monochrome.st`), lossless. Songs are fetched into a local cache ahead of air in parallel chunks, and can start playing before they finish arriving. |
 | Weather | **National Weather Service** (US, public domain) and **MET Norway** (worldwide). Sunrise and sunset are computed locally. |
 | Traffic | **State DOT work-zone feeds** (USDOT WZDx registry), **CHP** and **city dispatch** open data, and local headlines. |
 | News | Local and national **RSS**. |
@@ -141,6 +141,18 @@ Claude writes in the persona's voice and is never allowed to invent facts. Numbe
 - **The DJ never talks over vocals.** Talk starts only after the outgoing vocals end. Talk-ups size the break to the next song's intro so the vocals hit right after the last word ("hitting the post"). With unknown vocal timing, Valhalla waits instead of guessing.
 - **Auto-bed:** when there's nothing to talk over (after a stopset, a cold ending, or back-to-back reports), a music bed comes up under the DJ and hands over to the next intro. Beds are synthesized loops (Pulse, Warm, Drive and Chill, matched to your format) or your own uploads, crossfaded into seamless loops.
 - Spots butt tightly, and imaging overlaps song intros up to the post.
+
+### Getting songs from monochrome
+
+monochrome's stream origin is slow per connection (about 10–20 KB/s) and cuts every connection after about 30 seconds, which on some servers is only 260 KB of a 30 MB lossless file. Lossless FLAC needs 100–140 KB/s to play in real time, so one connection can never keep up. Valhalla fetches songs like a download manager:
+
+- **Small chunks:** every song comes in 256 KB Range chunks over a shared pool of parallel connections. Each chunk finishes well inside the 30-second cut-off, and a cut chunk resumes from its last byte.
+- **Adaptive connection count:** the pool adds connections while the origin keeps up, halves them on a 429 and eases off by one on a 52x (bursts of 16 or more get refused). In testing, 6 connections sustained about 80–100 KB/s. The default is 6, and you can change it in *Settings → Sources*.
+- **Songs are fetched ahead of air:** the next 10 songs in the log are fetched in airplay order, with the soonest first, often an hour before they air.
+- **Playback while fetching:** a song can start from its first bytes while the rest arrives. It's only marked ready once the rest will arrive in time. A song that can't make it is swapped for another due song, preferably one already in the cache.
+- **Resume across restarts:** progress is saved next to the partial file, and partials nobody needs are cleared after two days.
+- **Cache warming:** when nothing urgent is fetching, the rest of the library is fetched in the background, power rotation first, until the cache is 90% full.
+- **Cache size:** the cache defaults to 8 GB, about 250 lossless songs. Every cached song airs without touching the origin, so a cache that holds your whole rotation means steady state needs almost no network. *Engineering → Decks* shows the fetch queue, speed and connections live.
 
 ### Imaging
 
