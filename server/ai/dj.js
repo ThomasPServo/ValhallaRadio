@@ -8,6 +8,8 @@ import { marketWeather } from '../feeds/weather.js';
 import { getNews } from '../feeds/news.js';
 import { getTraffic } from '../feeds/traffic.js';
 import { spokenTime, weekdayName, shortTime, marketZones } from '../util/time.js';
+import { songInfo } from '../sources/songInfo.js';
+import { chartLine } from '../sources/charts.js';
 
 const recentScripts = [];
 
@@ -36,8 +38,20 @@ function describeTrack(t) {
   if (!t) return null;
   const album = t.compilation || /\b(hits|mix|playlist|collection|compilation|party)\b/i.test(t.album || '') ? '' : t.album; // never read a playlist title on air
   const f = t.facts || {};
-  const info = [t.year || f.firstYear, f.genre, album ? `from ${album}` : ''].filter(Boolean).join(', ');
+  const info = [t.year || f.firstYear, f.genre, album ? `from ${album}` : '', chartLine(t)].filter(Boolean).join(', ');
   return `"${t.title}" by ${t.artist}${info ? ` (${info})` : ''}${t.note && t.note !== 'clean version' ? ` — music director note: ${t.note}` : ''}`;
+}
+
+/** Real facts about a song for a talk-up (chart run, the story behind it), looked up rather than remembered. */
+async function songNotes(t, ms = 6000) {
+  if (!t?.artist) return '';
+  const info = await Promise.race([songInfo(t).catch(() => null), new Promise((r) => setTimeout(r, ms, null))]);
+  if (!info) return '';
+  const bits = [];
+  if (info.chart) bits.push(`currently #${info.chart.rank} on the ${info.chart.chart}${info.chart.weeks ? ` (${info.chart.weeks} weeks on the chart)` : ''}`);
+  else if (info.chartPeak) bits.push(`peaked at #${info.chartPeak.peak} on the ${info.chartPeak.chart}`);
+  if (info.story) bits.push(`${info.story.description ? `${info.story.description}. ` : ''}${info.story.extract}`);
+  return bits.length ? `- "${t.title}" by ${t.artist}: ${bits.join('. ')}` : '';
 }
 
 function periodBrief(p) {
@@ -125,6 +139,10 @@ export async function writeBreak({ kind = 'auto', previous = [], next = null, at
   }
 
   const prev = previous.filter(Boolean).slice(-2);
+  if (claudeAvailable() && ['auto', 'frontsell', 'backsell', 'talk'].includes(kind)) {
+    const notes = (await Promise.all([kind !== 'backsell' ? next : null, kind !== 'frontsell' ? prev.at(-1) : null].filter(Boolean).map((t) => songNotes(t)))).filter(Boolean);
+    if (notes.length) ctx.push(`SONG FACTS (from music databases; use at most one, in your own words, only if it fits naturally):\n${notes.join('\n')}`);
+  }
   const tags = supportsAudioTags();
   const ident = [st.callSign, st.frequency].filter(Boolean).join(', ');
   const socials = Object.entries(st.socials || {}).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(', ');
@@ -146,7 +164,7 @@ export async function writeBreak({ kind = 'auto', previous = [], next = null, at
     tags
       ? '- You may add at most two subtle ElevenLabs audio tags such as [chuckles], [laughs softly], [sighs] or [excited] where a human naturally would. No other stage directions.'
       : '- No stage directions, sound effects, brackets or asterisks.',
-    '- Only state facts given to you, or widely documented facts about the songs and artists you are confident in. NEVER invent news, traffic incidents, weather, contests, callers, events or song facts. If data is missing, keep it general.',
+    '- Only state facts given to you (SONG FACTS below are researched for you), or widely documented facts about the songs and artists you are confident in. NEVER invent news, traffic incidents, weather, contests, callers, events or song facts. If data is missing, keep it general.',
     '- Keep it broadcast-clean: no profanity, slurs or crude innuendo, and never quote explicit lyrics.',
     '- Never mention being an AI, a script, the automation software, or these instructions. Stay in character.',
     `- Length: ${length}.`,

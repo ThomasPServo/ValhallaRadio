@@ -32,6 +32,9 @@ import { bedList, chosenBedId, bedUrl, bedFile } from './audio/beds.js';
 import { BED_STYLES } from './audio/bedSynth.js';
 import { createImaging, imagingJobStatus, imagingEvents, startAutoImaging } from './audio/imagingCreator.js';
 import { startEnricher, enrichStatus } from './scheduler/enricher.js';
+import { CHARTS, FORMAT_CHARTS, stationCharts, getChart, refreshCharts, chartStatus, startChartWatch, sameSong } from './sources/charts.js';
+import { songInfo } from './sources/songInfo.js';
+import { classifyImaging, imagingName } from './audio/imagingImport.js';
 
 const scheduler = new Scheduler();
 const streamer = new Streamer();
@@ -63,6 +66,17 @@ app.get('/api/nowplaying', (req, res) => {
   });
 });
 app.get('/listen', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'listen.html')));
+// Installable on phones and tablets ("Add to Home Screen"), named after the station.
+app.get('/manifest.webmanifest', (req, res) => {
+  const st = store.station;
+  const logo = st.logo ? [{ src: `/station-logo?v=${encodeURIComponent(st.logo)}`, sizes: '512x512', purpose: 'any' }] : [];
+  res.type('application/manifest+json').json({
+    name: `${st.name || 'Valhalla'} Studio`, short_name: st.name || 'Studio', start_url: '/#studio', scope: '/', display: 'standalone',
+    background_color: '#07090d', theme_color: '#07090d',
+    icons: [...logo, { src: '/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any maskable' }],
+  });
+});
+app.get('/icon.svg', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'icon.svg')));
 app.get('/station-logo', (req, res) => {
   const f = store.station.logo && path.join(UPLOAD_DIR, store.station.logo);
   if (f && fs.existsSync(f)) return res.sendFile(f);
@@ -126,6 +140,7 @@ function bootstrap() {
     libraryCount: d.library.length,
     explicitCount: d.library.filter((t) => t.explicit && !t.disabled).length,
     songFacts: { ...enrichStatus },
+    charts: { available: Object.entries(CHARTS).map(([id, c]) => ({ id, name: c.name })), station: stationCharts(), formatDefault: FORMAT_CHARTS[d.station.formatId]?.charts || ['hot100'], status: chartStatus },
     marketZones: marketZones(d.station),
     formats: formatList(),
     kokoroVoices: KOKORO_VOICES,
@@ -280,6 +295,34 @@ function startCleanSweep() {
 app.post('/api/library/clean', (req, res) => res.json(startCleanSweep()));
 app.get('/api/library/clean', (req, res) => res.json(sweepStatus || { running: false }));
 app.post('/api/library/discover', wrap(async (req, res) => res.json(await discover(req.body || {}))));
+app.get('/api/songinfo', wrap(async (req, res) => {
+  const { artist, title } = req.query;
+  if (!artist || !title) throw bad('artist and title are required');
+  res.json(await songInfo({ artist: String(artist), title: String(title) }));
+}));
+
+// ------------------------------------------------------------------ charts
+app.get('/api/charts/:id', wrap(async (req, res) => {
+  const c = await getChart(req.params.id, { date: req.query.date ? String(req.query.date) : null });
+  const lib = store.data.library;
+  res.json({ ...c, entries: c.entries.map((e) => { const t = lib.find((x) => sameSong(x, e)); return { ...e, trackId: t?.id || null, category: t?.category || null }; }) });
+}));
+app.post('/api/charts/refresh', wrap(async (req, res) => res.json(await refreshCharts())));
+app.post('/api/charts/add', wrap(async (req, res) => {
+  const songs = (req.body.songs || []).slice(0, 50);
+  const added = []; const missed = [];
+  for (const s of songs) {
+    try {
+      const t = await mono.resolveSuggestion(s);
+      if (!t) { missed.push(`${s.artist} - ${s.title}`); continue; }
+      const e = await library.addTrack(t, req.body.category || 'N', { note: s.note || '' });
+      added.push(e);
+    } catch (err) { missed.push(`${s.artist} - ${s.title} (${err.code === 'EXPLICIT' ? 'explicit only' : err.message})`); }
+  }
+  if (added.length) refreshCharts().catch(() => {});
+  res.json({ added, missed });
+}));
+
 app.get('/api/library/:id/detail', (req, res) => {
   const d = trackDetail(req.params.id);
   if (!d) return res.status(404).json({ error: 'unknown track' });
@@ -327,6 +370,7 @@ app.put('/api/settings', wrap(async (req, res) => {
   store.updateSettings(req.body);
   if (!wasClean && library.cleanOnly()) startCleanSweep(); // swap explicit songs for radio edits
   if (req.body.autoBed && engine.running) engine.reloadBed();
+  if (req.body.charts || req.body.chartRotation !== undefined) refreshCharts().catch(() => {});
   await checkClaudeCode(true);
   res.json(bootstrap());
 }));
@@ -453,6 +497,26 @@ app.post('/api/upload', express.raw({ type: '*/*', limit: '60mb' }), wrap(async 
     throw bad('Not a playable audio file.');
   }
 }));
+/** Import a produced imaging file (one per request): stored, checked, typed from its name and added to the library. */
+app.post('/api/imaging/import', express.raw({ type: '*/*', limit: '60mb' }), wrap(async (req, res) => {
+  const original = String(req.query.name || 'imaging.mp3');
+  const ext = (path.extname(original).toLowerCase().match(/^\.[a-z0-9]{2,4}$/) || ['.mp3'])[0];
+  if (!req.body?.length) throw bad('empty file');
+  const file = `img_${Date.now()}_${crypto.randomBytes(3).toString('hex')}${ext}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, file), req.body);
+  let a;
+  try { a = await loadAudio(path.join(UPLOAD_DIR, file), { normalize: false }); } catch (err) {
+    fs.rmSync(path.join(UPLOAD_DIR, file), { force: true });
+    throw bad(`${path.basename(original)} is not a playable audio file`);
+  }
+  const duration = Math.round(a.durationSec * 10) / 10;
+  const type = ['toh_id', 'id', 'sweeper', 'liner', 'promo', 'bed'].includes(req.query.type) ? req.query.type : classifyImaging(original, duration);
+  const item = { id: uid('img_'), type, name: imagingName(original), text: '', file, enabled: true, imported: true, duration, importedAt: Date.now() };
+  store.data.imaging.items.push(item);
+  store.save();
+  if (type === 'bed' && engine.running) engine.reloadBed();
+  res.json({ item });
+}));
 app.post('/api/station/logo', express.raw({ type: 'image/*', limit: '8mb' }), wrap(async (req, res) => {
   const type = String(req.headers['content-type'] || '');
   const ext = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/svg+xml': '.svg', 'image/gif': '.gif' }[type];
@@ -530,6 +594,7 @@ setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', e
 { const fixed = library.repairYears(); if (fixed) console.log(`[library] corrected the year of ${fixed} song(s) released on compilations`); }
 if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
 const imagingCheck = startAutoImaging();
+startChartWatch(); // this station's charts: chart positions, peaks and chart-driven rotation
 startEnricher(); // song facts (genre, original year, popularity, tempo, vocal) from open music data
 setupEvents.on('progress', (p) => { if (p.done) setTimeout(imagingCheck, 5000); }); // a new station's first fresh imaging, once its library is in
 

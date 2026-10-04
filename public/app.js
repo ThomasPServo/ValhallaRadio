@@ -20,6 +20,9 @@ async function boot() {
   brand();
   connect();
   window.addEventListener('hashchange', route);
+  $('#moreBtn').onclick = () => setNav(!document.body.classList.contains('navopen'));
+  $('#navScrim').onclick = () => setNav(false);
+  $('#nav').addEventListener('click', (e) => { if (e.target.closest('a')?.dataset.view === current) setNav(false); });
   route();
   requestAnimationFrame(chrome);
   setInterval(pills, 1000);
@@ -36,11 +39,20 @@ export function brand() {
   document.title = `${st.name || 'Valhalla'} — Studio`;
 }
 
+/** Phones: the full navigation opens as a sheet above the tab bar. */
+function setNav(open) {
+  document.body.classList.toggle('navopen', open);
+  $('#moreBtn').setAttribute('aria-expanded', String(open));
+}
+
 function route() {
   const next = (location.hash || '#studio').slice(1);
   current = VIEWS[next] ? next : 'studio';
-  $$('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.view === current));
+  $$('#nav a, #tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.view === current));
+  $('#moreBtn').classList.toggle('active', !$(`#tabbar a[data-view="${current}"]`));
+  setNav(false);
   render();
+  window.scrollTo(0, 0);
 }
 
 export function render() {

@@ -363,6 +363,40 @@ export async function claudeJson(opts) {
 export const aiText = claudeText;
 export const aiJson = claudeJson;
 
+const LOOKUPS_PROP = {
+  type: 'array',
+  description: 'Songs you need facts about before answering (leave empty when you do not)',
+  items: { type: 'object', properties: { artist: { type: 'string' }, title: { type: 'string' } }, required: ['artist', 'title'], additionalProperties: false },
+};
+
+/**
+ * Structured output with a song-lookup tool that works on every provider (CLIs, APIs and local models
+ * alike, no native tool calling needed): the model may answer with `lookups` instead, gets the facts
+ * from `lookup` and is asked again. The last round has no lookup option, so it always ends in an answer.
+ * @param {object} opts  claudeJson options plus `lookup: async ({artist, title}) => string` and `maxLookups`
+ */
+export async function claudeJsonWithLookups({ lookup, maxLookups = 8, rounds = 2, onLookup = null, ...opts }) {
+  if (!lookup || opts.schema?.type !== 'object') return claudeJson(opts);
+  const toolSchema = {
+    ...opts.schema,
+    properties: { lookups: LOOKUPS_PROP, ...opts.schema.properties },
+    required: ['lookups', ...(opts.schema.required || [])],
+  };
+  const toolNote = `\n\nSong lookup tool: if you are unsure about any song you would choose or mention (its year, genre, sound, whether it was a hit, or whether it exists), list up to ${maxLookups} songs in "lookups" and give a minimal placeholder for everything else (empty lists and strings). You will get facts from music databases and charts, then answer for real. If you are sure, leave "lookups" empty and answer now.`;
+  let prompt = opts.prompt;
+  for (let round = 0; round < rounds; round++) {
+    const out = await claudeJson({ ...opts, system: opts.system + toolNote, prompt, schema: toolSchema });
+    const asks = (out.lookups || []).filter((l) => l?.artist && l?.title).slice(0, maxLookups);
+    delete out.lookups;
+    if (!asks.length) return out;
+    onLookup?.(asks);
+    const results = await Promise.all(asks.map((a) => lookup(a).catch((err) => `${a.artist} - ${a.title}: lookup failed (${err.message})`)));
+    prompt += `\n\nLookup results (facts from music databases and charts; trust these over memory):\n${results.join('\n')}`;
+  }
+  return claudeJson({ ...opts, prompt: `${prompt}\n\nNow give your final answer.` });
+}
+export const aiJsonWithLookups = claudeJsonWithLookups;
+
 function parseJson(text) {
   try {
     return JSON.parse(text);

@@ -3,15 +3,22 @@
 // "crate digging" on monochrome to discover new songs that fit the format.
 
 import { store } from '../store.js';
-import { claudeAvailable, claudeJson } from './claude.js';
+import { claudeAvailable, claudeJson, claudeJsonWithLookups } from './claude.js';
 import { candidatesFor, checkRules } from '../scheduler/rotation.js';
 import * as library from '../scheduler/library.js';
 import * as mono from '../sources/monochrome.js';
 import { weekdayName, spokenTime } from '../util/time.js';
-import { factLine, relatedArtists } from '../sources/songFacts.js';
+import { factLine, relatedArtists, itunesGenre } from '../sources/songFacts.js';
+import { songInfo, infoText } from '../sources/songInfo.js';
+import { getChart, stationCharts, chartHits, sameSong, genreChart, FORMAT_CHARTS } from '../sources/charts.js';
+import { FORMATS } from '../setup/formats.js';
 import { claudeProvider } from './claude.js';
 
 const log = (...a) => console.log('[music-director]', ...a);
+
+/** The AI's song lookup tool: facts, chart run and story for a song it doesn't know. */
+const lookupSong = async (a) => infoText(await songInfo(a, { story: false }));
+const logLookups = (asks) => log(`AI looked up: ${asks.map((a) => `${a.artist} - ${a.title}`).join('; ')}`);
 
 const PICKS_SCHEMA = {
   type: 'object',
@@ -139,10 +146,13 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
         'Candidates per category (id | artist - title (details)). Only use these ids, and only from the slot\'s category:',
         ...catIds.flatMap((id) => [`== Category ${id} (${(categories.find((c) => c.id === id) || {}).name || ''}) ==`, ...cands[id].map((t) => fmtTrack(t, at))]),
       ].join('\n');
-      const out = await claudeJson({
+      const out = await claudeJsonWithLookups({
+        lookup: lookupSong,
+        onLookup: logLookups,
+        rounds: 1,
         system:
           'You are the music director of a professional commercial radio station. Judge every song only by the facts listed with it ' +
-          '(year, genre, vocal, tempo, energy, popularity, intro, ending, last play) — do not rely on your own memory of songs. You build each hour so it flows: ' +
+          '(year, genre, vocal, tempo, energy, popularity, chart position, intro, ending, last play) — do not rely on your own memory of songs. You build each hour so it flows: ' +
           'vary tempo and energy in a pleasing arc, avoid two similar-sounding songs back to back, mix eras and male/female/group artists, ' +
           'open the hour strong, make songs after a stopset familiar and high-energy to win listeners back, and match the daypart mood. ' +
           'Right after a DJ break, prefer a song with an instrumental intro of 5+ seconds (intro shown in the list) so the DJ can talk up to the vocals. ' +
@@ -196,25 +206,118 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
 }
 
 /**
- * Find new music for a category. Two ways, combined:
- *  - "ai": the AI suggests songs from its own knowledge; each is verified on monochrome (big models know music well).
- *  - "catalog": real songs from artists related to the ones the station plays (open listener data), filtered to the
- *    category's era and popularity; the AI only chooses among verified songs, so it can't invent anything.
- * Auto uses the catalog for local models (which don't know music reliably) and to top up whatever the AI missed.
+ * Find new music for a category, from the most factual source down:
+ *  - "charts": this week's charts for the format (current categories) or Billboard Hot 100 hits from the
+ *    category's era (gold and recurrent); real hits, no AI knowledge needed
+ *  - "ai": the AI suggests songs from its own knowledge (shown this week's charts, with a lookup tool); each
+ *    is verified on monochrome (big models know music well)
+ *  - "catalog": real songs from artists related to the ones the station plays (open listener data), filtered
+ *    to the category's era; the AI only chooses among verified songs, so it can't invent anything
+ * Auto tries charts, then the AI (not for local models, which don't know music reliably), then the catalog.
  */
 export async function discover({ category = 'N', count = 10, guidance = '' } = {}) {
   const mode = store.settings.discoveryMode || 'auto';
   const provider = claudeProvider();
-  const useAi = provider && mode !== 'catalog' && !(mode === 'auto' && provider === 'lmstudio');
-  let res = { added: [], missed: [] };
-  if (useAi) {
-    try { res = await discoverWithAi({ category, count, guidance }); } catch (err) { log('AI discovery failed:', err.message); }
-  }
-  if (res.added.length < count && mode !== 'ai') {
-    const more = await discoverFromCatalog({ category, count: count - res.added.length, guidance }).catch((err) => { log('catalog discovery failed:', err.message); return { added: [], missed: [] }; });
-    res = { added: [...res.added, ...more.added], missed: res.missed, catalog: more.added.length };
+  const steps = {
+    auto: ['charts', ...(provider && provider !== 'lmstudio' ? ['ai'] : []), 'catalog'],
+    charts: ['charts', 'catalog'],
+    ai: provider ? ['ai'] : ['charts', 'catalog'],
+    catalog: ['catalog'],
+  }[mode] || ['charts', 'catalog'];
+  const run = { charts: discoverFromCharts, ai: discoverWithAi, catalog: discoverFromCatalog };
+  const res = { added: [], missed: [], by: {} };
+  for (const step of steps) {
+    const need = count - res.added.length;
+    if (need <= 0) break;
+    try {
+      const r = await run[step]({ category, count: need, guidance });
+      res.added.push(...r.added);
+      res.missed.push(...(r.missed || []));
+      res.by[step] = r.added.length;
+    } catch (err) { log(`${step} discovery failed:`, err.message); }
   }
   return res;
+}
+
+/** Does a song fit the format? Asked of iTunes only for songs from a chart that mixes styles. */
+async function fitsFormat(e) {
+  const re = FORMAT_CHARTS[store.station.formatId]?.genres;
+  if (!re || e.genreChart) return true;
+  const g = await itunesGenre(e).catch(() => null);
+  return g?.genre ? re.test(g.genre) : false;
+}
+
+/**
+ * Chart hits the library doesn't have yet: this week's charts for current categories (power = top 15,
+ * current = top 50, new = the newest arrivals), the Hot 100 archive for gold and recurrent ones.
+ */
+export async function discoverFromCharts({ category = 'N', count = 10, guidance = '' } = {}) {
+  const fid = store.station.formatId;
+  const gold = FORMATS[fid]?.mode === 'gold';
+  const now = new Date().getFullYear();
+  let pool = [];
+  if (!gold && ['A', 'B', 'N'].includes(category)) {
+    for (const id of stationCharts()) {
+      try { const c = await getChart(id); pool.push(...c.entries.map((e) => ({ ...e, chart: c.short, genreChart: genreChart(id) }))); } catch { /* skip */ }
+    }
+    pool = pool.filter((e) => (category === 'A' ? e.rank <= 15 : category === 'B' ? e.rank <= 50 : true));
+    pool.sort(category === 'N' ? (a, b) => (a.weeks ?? 99) - (b.weeks ?? 99) || (b.year || 0) - (a.year || 0) || a.rank - b.rank : (a, b) => a.rank - b.rank);
+  } else {
+    const prof = categoryProfile(category);
+    let [from, to] = [prof.yearFrom, prof.yearTo];
+    if (!from) [from, to] = gold ? FORMAT_CHARTS[fid]?.gold || [1980, null] : category === 'C' ? [now - 4, now - 1] : [now - 15, now - 4];
+    const hits = await chartHits({ yearFrom: from, yearTo: to || now, maxPeak: ['A', 'G'].includes(category) ? 10 : 30 });
+    // best peaks first, but spread over the era (not every #1 from the first year)
+    const byPeak = new Map();
+    for (const h of hits) { if (!byPeak.has(h.peak)) byPeak.set(h.peak, []); byPeak.get(h.peak).push(h); }
+    pool = [...byPeak.keys()].sort((a, b) => a - b).flatMap((k) => byPeak.get(k).sort(() => Math.random() - 0.5))
+      .map((h) => ({ ...h, rank: h.peak, chart: 'Hot 100', fromHistory: true }));
+  }
+  const seen = [];
+  pool = pool.filter((e) => {
+    if (store.data.library.some((t) => sameSong(t, e)) || seen.some((x) => sameSong(x, e))) return false;
+    if (library.cleanOnly() && e.explicit) return false; // a clean edit may exist, but plenty of other hits do too
+    seen.push(e);
+    return true;
+  });
+  if (!pool.length) return { added: [], missed: [] };
+
+  let picks = [];
+  if (claudeAvailable() && pool.length > count) {
+    try {
+      const out = await claudeJsonWithLookups({
+        lookup: lookupSong, onLookup: logLookups, rounds: 1,
+        system: 'You are a radio music director. Choose only from the listed chart songs, the ones that fit the station format.',
+        prompt: [`Format: ${store.station.format}`, `Category ${category} (${(store.data.categories.find((c) => c.id === category) || {}).name || ''})`, guidance ? `Direction: ${guidance}` : '',
+          `Choose the ${count} best fits:`, ...pool.slice(0, 80).map((e, i) => `${i} | ${e.artist} - ${e.title} (${e.fromHistory ? `peaked #${e.peak} on the Hot 100 in ${e.year}` : `#${e.rank} ${e.chart}${e.weeks ? `, ${e.weeks} wks` : ''}`})`)].filter(Boolean).join('\n'),
+        maxTokens: 3000, effort: 'low',
+        schema: { type: 'object', additionalProperties: false, required: ['choices'], properties: { choices: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['index', 'reason'], properties: { index: { type: 'integer' }, reason: { type: 'string' } } } } } },
+      });
+      picks = (out.choices || []).filter((c) => pool[c.index]).map((c) => ({ e: pool[c.index], reason: c.reason }));
+      for (const e of pool) if (!picks.some((p) => p.e === e)) picks.push({ e, reason: '', spare: true }); // spares if the catalog lacks some
+    } catch (err) { log('chart picks by AI failed, using chart order:', err.message); }
+  }
+  const added = []; const missed = [];
+  const ordered = picks.length ? picks : pool.map((e) => ({ e, reason: '', check: true }));
+  let tries = 0; let checks = 0;
+  for (const { e, reason, check } of ordered) {
+    if (added.length >= count || tries >= count * 3) break;
+    if (check) {
+      if (!e.genreChart && ++checks > count * 4) break;
+      if (!(await fitsFormat(e))) continue;
+    }
+    tries++;
+    const label = e.fromHistory ? `peaked #${e.peak} on the Hot 100 (${e.year})` : `#${e.rank} on ${e.chart}`;
+    try {
+      const t = await mono.resolveSuggestion(e);
+      if (!t) { missed.push(`${e.artist} - ${e.title} (not in the catalog)`); continue; }
+      const entry = await library.addTrack(t, category, { note: reason ? `${label}: ${reason}` : label });
+      if (e.fromHistory) entry.chartPeak = { peak: e.peak, chart: 'Hot 100', year: e.year };
+      added.push(entry);
+    } catch (err) { missed.push(`${e.artist} - ${e.title} (${err.message})`); }
+  }
+  log(`chart discovery: ${added.length} songs for ${category}${missed.length ? `, ${missed.length} not found` : ''}`);
+  return { added, missed };
 }
 
 /** Era and popularity a category actually plays, from its current songs. */
@@ -278,10 +381,24 @@ export async function discoverFromCatalog({ category = 'N', count = 10, guidance
   return { added, missed };
 }
 
+async function chartContext() {
+  const lines = [];
+  for (const id of stationCharts().slice(0, 2)) {
+    try {
+      const c = await getChart(id);
+      lines.push(`${c.name} (${c.date || 'this week'}): ${c.entries.slice(0, 30).map((e) => `#${e.rank} ${e.artist} - ${e.title}`).join('; ')}`);
+    } catch { /* skip */ }
+  }
+  return lines.join('\n');
+}
+
 async function discoverWithAi({ category = 'N', count = 10, guidance = '' } = {}) {
   const cats = store.data.categories.map((c) => `${c.id} = ${c.name}`).join(', ');
   const existing = store.data.library.slice(-300).map((t) => `${t.artist} - ${t.title}`).join('\n');
-  const out = await claudeJson({
+  const charts = await chartContext();
+  const out = await claudeJsonWithLookups({
+    lookup: lookupSong,
+    onLookup: logLookups,
     system: 'You are an expert radio music director with encyclopedic knowledge of popular music charts and radio airplay. You only suggest real, released songs with their exact official titles and primary artist names.',
     prompt: [
       `Station format: ${store.station.format}`,
@@ -289,6 +406,7 @@ async function discoverWithAi({ category = 'N', count = 10, guidance = '' } = {}
       `Categories: ${cats}`,
       `Suggest ${count} songs for category "${category}" that fit this format${guidance ? `. Extra direction: ${guidance}` : ''}.`,
       library.cleanOnly() ? 'The station only airs clean versions: suggest songs that have a clean radio edit (no songs that only exist with explicit lyrics).' : '',
+      charts ? `This week's charts (real data: your knowledge of current music may be out of date):\n${charts}` : '',
       'Use the requested category for every song. Energy is 1 (mellow) to 5 (peak).',
       'Do not repeat anything already in the library:',
       existing || '(library is empty)',

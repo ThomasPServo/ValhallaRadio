@@ -249,7 +249,9 @@ export const settings = {
         </div></details>
         ${check('useClaudeForMusic', 'The AI picks the music for each hour', s.useClaudeForMusic)}
         ${check('allowDiscovery', 'Add new music new music when a category runs thin', s.allowDiscovery)}
-        ${select('discoveryMode', 'How new music is found', s.discoveryMode || 'auto', [['auto', 'Auto (AI suggestions, catalog for local models)'], ['ai', 'AI suggestions, checked against the catalog'], ['catalog', 'Catalog only: artists related to yours (no AI knowledge needed)']])}
+        ${select('discoveryMode', 'How new music is found', s.discoveryMode || 'auto', [['auto', 'Auto: charts, then AI suggestions (not local models), then related artists'], ['charts', 'Charts, then related artists (no AI knowledge needed)'], ['ai', 'AI suggestions only, checked against the catalog'], ['catalog', 'Related artists only (no AI knowledge needed)']])}
+        <div><label>Charts to follow (unticked = your format's charts)</label><div class="checks">${(state.B.charts?.available || []).map((c) => `<label class="nowrap"><input type="checkbox" class="chartChk" data-id="${c.id}" ${(s.charts?.length ? s.charts : state.B.charts.formatDefault || []).includes(c.id) ? 'checked' : ''}> ${esc(c.name)}</label>`).join('')}</div></div>
+        ${check('chartRotation', 'Chart rotation: chart hits move between power, current and recurrent (current formats)', s.chartRotation !== false)}
         <p class="hint" style="margin:0">Every song gets facts from open music data (genre, original year, popularity, tempo, vocal) so any AI, even a small local one, programs from facts rather than memory.${state.B.songFacts?.total ? ` ${state.B.songFacts.done} of ${state.B.songFacts.total} songs checked.` : ''}</p>
       </div>
       <div class="card stack">
@@ -308,6 +310,9 @@ export const settings = {
     saveSettings: (b) => run(b, async () => {
       const v = collect($('#settingsForm'));
       v.trafficFeeds = (v.trafficFeeds || []).map((url) => ({ url }));
+      const charts = [...document.querySelectorAll('.chartChk:checked')].map((x) => x.dataset.id);
+      const def = state.B.charts?.formatDefault || [];
+      v.charts = charts.length && (charts.length !== def.length || charts.some((id) => !def.includes(id))) ? charts : [];
       state.B = await api('PUT', '/api/settings', v);
       bus.emit('bootstrap', state.B);
     }, 'Settings saved'),

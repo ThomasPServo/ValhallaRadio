@@ -180,6 +180,19 @@ export function uploadFile(accept = 'audio/*') {
   });
 }
 
+/** Pick several files, or a whole folder (`directory`): each keeps its folder path in `relPath`. */
+export function uploadFiles(accept = 'audio/*', { directory = false } = {}) {
+  return new Promise((resolve) => {
+    const f = document.createElement('input');
+    f.type = 'file';
+    f.accept = accept;
+    f.multiple = true;
+    if (directory) f.webkitdirectory = true;
+    f.onchange = () => resolve([...f.files].map((x) => Object.assign(x, { relPath: x.webkitRelativePath || x.name })));
+    f.click();
+  });
+}
+
 export function modal(html, { cls = '' } = {}) {
   const root = $('#modalRoot');
   root.innerHTML = `<div class="modal ${cls}"><div class="box">${html}</div></div>`;

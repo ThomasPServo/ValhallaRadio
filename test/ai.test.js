@@ -19,6 +19,12 @@ before(async () => {
       const b = JSON.parse(body);
       seen.push(b);
       if (rejectFormat && b.response_format) { res.statusCode = 400; return res.end('{"error":"response_format not supported"}'); }
+      if (/Song lookup tool/.test(b.messages[0].content)) {
+        // a model that doesn't know this week's music: it looks the song up first, then answers from the facts
+        const facts = b.messages[1].content.match(/Lookup results[^\n]*\n(.*)/);
+        const content = facts ? JSON.stringify({ lookups: [], pick: facts[1].includes('#1 Hot 100') ? 'Boston' : 'unknown' }) : JSON.stringify({ lookups: [{ artist: 'Stella Lefty', title: 'Boston' }], pick: '' });
+        return res.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content } }] }));
+      }
       const content = b.response_format || /JSON Schema/.test(b.messages[0].content)
         ? '<think>pick something upbeat</think>```json\n{"pick":"Mr. Brightside"}\n```'
         : '<think>hmm</think>Twenty past seven on the station.';
@@ -126,4 +132,21 @@ test('auto picks the first ready provider; signed-out CLIs are skipped', async (
     await checkAi(true);
     assert.equal(claudeStatus().provider, null);
   } finally { delete process.env.FAKE_CODEX_LOGGED_OUT; }
+});
+
+test('lookup tool: any model can ask for song facts before answering', async () => {
+  settings({ claudeProvider: 'lmstudio', lmstudioUrl: base });
+  const { checkAi, claudeJsonWithLookups } = await ai();
+  await checkAi(true);
+  const asked = [];
+  const out = await claudeJsonWithLookups({
+    system: 'You are a music director.',
+    prompt: 'Which song is the biggest hit right now?',
+    schema: { type: 'object', properties: { pick: { type: 'string' } }, required: ['pick'], additionalProperties: false },
+    lookup: async (a) => { asked.push(a); return `${a.artist} - ${a.title}: 2026, country pop, #1 Hot 100`; },
+  });
+  assert.deepEqual(asked, [{ artist: 'Stella Lefty', title: 'Boston' }]);
+  assert.deepEqual(out, { pick: 'Boston' }, 'answered from the looked-up facts, lookups field removed');
+  const req = seen.at(-1);
+  assert.ok(req.response_format.json_schema.schema.required.includes('lookups'), 'the lookup field is part of the schema (strict providers need it required)');
 });

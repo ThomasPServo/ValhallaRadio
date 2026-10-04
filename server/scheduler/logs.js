@@ -33,14 +33,18 @@ export function estDuration(item) {
   return EST[item.type] || 10;
 }
 
-function pickImaging(type) {
+let lastStamp = 0;
+export function pickImaging(type) {
   for (const t of IMAGING_FALLBACK[type] || [type]) {
     const today = zoned(new Date(), store.station.timezone).dateKey;
-    const pool = store.data.imaging.items.filter((i) => i.enabled && i.type === t && (i.text || i.file) && !(i.expires && i.expires < today)); // seasonal pieces retire themselves
+    let pool = store.data.imaging.items.filter((i) => i.enabled && i.type === t && (i.text || i.file) && !(i.expires && i.expires < today)); // seasonal pieces retire themselves
+    // produced imaging the station imported plays instead of voiced copy of the same type (unless set to mix)
+    if (store.settings.importedImaging !== 'mix' && pool.some((i) => i.file)) pool = pool.filter((i) => i.file);
     if (pool.length) {
       pool.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
       const pick = pool[0];
-      pick.lastUsed = Date.now() + Math.random(); // reserve so the next pick rotates
+      lastStamp = Math.max(Date.now(), lastStamp + 1);
+      pick.lastUsed = lastStamp; // reserve so the next pick rotates (strictly increasing: least recently used goes next)
       return pick;
     }
   }

@@ -84,8 +84,24 @@ Claude picks every song for every hour from the eligible candidates in each cloc
 | Vocal type (male, female, group, duet) | MusicBrainz and Deezer |
 | Popularity (0–100) | Deezer |
 | Tempo | Deezer, or Valhalla's own analysis |
+| Chart position and peak | This station's charts (below) |
 
-Valhalla also estimates energy from tempo, loudness and genre. The AI sees each candidate as a fact line, for example `2003, alternative rock/indie rock, group vocal, 148 bpm uptempo, energy 5 (est), popularity 80, intro 8s, cold end, last 5h ago`, and is told to judge songs only by those facts.
+Valhalla also estimates energy from tempo, loudness and genre. The AI sees each candidate as a fact line, for example `2003, alternative rock/indie rock, group vocal, 148 bpm uptempo, energy 5 (est), popularity 80, intro 8s, cold end, #4 Hot 100, up from #6, 12 wks, last 5h ago`, and is told to judge songs only by those facts.
+
+**A lookup tool for every AI.** When the music director isn't sure about a song, whether it's picking an hour or suggesting new music, it can ask for a lookup before answering. Valhalla returns the song's facts, chart run and story, and the AI answers from those. This works the same on Claude, ChatGPT and local LM Studio models, because it's built on structured output rather than native tool calling. Every song in the library also has an ℹ panel with the same facts, its chart position and what Wikipedia says about it.
+
+**Charts** (keyless), so the station knows this week's hits even when the AI doesn't:
+
+- **Billboard Hot 100:** this week, plus every week back to 1958 from a public archive. Gold formats use the history to find an era's real hits.
+- **Apple Music Top Songs, and iTunes top songs** overall and for pop, country, rock, alternative, hip-hop, R&B, dance, Christian and Latin, for the station's country.
+
+Each format follows its own charts (country follows iTunes Country and the Hot 100, for example), or you can pick charts in Settings. Every 6 hours, Valhalla marks library songs with their chart position and best peak, and the AI-suggestion prompt includes this week's charts. With **chart rotation** (current formats, on by default):
+
+- top-15 songs move to power rotation;
+- other charting songs move to current;
+- hits that drop off move to recurrent.
+
+**Library → Charts** shows any chart, or any past Hot 100 week. It marks which songs you have, and you can add the ones you don't.
 
 **Without any AI,** a flow-aware picker uses the same facts. It plays the most-due song, but:
 
@@ -97,9 +113,10 @@ Valhalla also estimates energy from tempo, loudness and genre. The AI sees each 
 
 **Finding new music** (Settings → AI → *How new music is found*) when a category runs thin:
 
+- **Charts:** chart hits the library doesn't have yet. For current categories that means this week's charts: top 15 for power, top 50 for current, the newest arrivals for new music. For gold and recurrent categories it means Hot 100 hits from the category's era. When a chart mixes styles, an AI (or, without one, each song's iTunes genre) keeps only the songs that fit the format.
 - **AI suggestions:** the AI suggests songs, and each one is checked against the monochrome catalog.
 - **Catalog only:** Valhalla finds artists related to the ones the category already plays (from Deezer's listener graph), pulls their real catalog songs and keeps only songs in the category's era. An AI, if one is connected, then ranks those candidates; without one, Valhalla ranks them by popularity. Either way, the AI never has to recall a song from memory.
-- **Auto** (the default) uses AI suggestions with Claude or ChatGPT, catalog only with a local LM Studio model, and tops up from the catalog when suggestions come up short.
+- **Auto** (the default) tries charts first, then AI suggestions (with Claude or ChatGPT, not local models), then related artists, until the category is full.
 
 **Clean versions only** (on by default): explicit songs are swapped for their clean radio edits. Songs that have no clean version are skipped and never air.
 
@@ -112,6 +129,7 @@ Breaks are written a few elements before air time, so they're current. Each brea
 - live **weather** (official forecast wording from the NWS) with alerts first;
 - **traffic** incidents and closures;
 - local **headlines**;
+- **song facts** for the songs around the break: chart position, and the song's story from Wikipedia (who wrote it, the album, the history), so even a model that doesn't know a brand-new song can give a real talk-up;
 - the DJ's own recent breaks, so it never repeats itself.
 
 Claude writes in the persona's voice and is never allowed to invent facts. Numbers are read the way radio people say them: *one oh one point nine*, *US one eighty-three*, *seven oh five*, *twenty twenty-six*.
@@ -128,6 +146,7 @@ Claude writes in the persona's voice and is never allowed to invent facts. Numbe
 
 - **Produced automatically from copy**, with sound design rendered in a worker thread: whooshes, risers, sub-drop impacts, reverb and an echo throw on the last word. Six styles: *punch*, *riser*, *smooth*, *stutter*, *voiced over the music bed*, and *dry*.
 - News, weather and traffic get their own sounder and bed.
+- **Import your own produced imaging:** in Imaging → *Import*, pick files, pick a whole folder, or drag and drop. MP3, WAV, AIFF, FLAC and M4A all work. Each file is checked, and its type is read from file and folder names (`TOH`, `Legal ID`, `Station ID`, `Jingle`, `Sweeper`, `Stinger`, `Liner`, `Promo`, `Bed`), with the length as a fallback; you can change it after import. By default, imported pieces replace voiced copy of the same type on air. Types you haven't imported still use voiced copy, and you can choose to mix the two instead.
 - **Sweeper creator:** Claude writes fresh imaging weekly (artist roll-calls from your rotation, positioning lines, local and seasonal flavor), and every piece is produced and ready to air. Every line passes a broadcast check first: no ratings or "number one" claims, contests, unverifiable promises, profanity or web addresses, and legal IDs must carry the call letters and city. Seasonal pieces retire themselves, and older auto pieces rotate out. Pinned and hand-made pieces stay.
 
 ### Air chain
@@ -159,16 +178,25 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 |---|---|
 | **Studio** | Deck with countdowns (to vocals, talk left, remaining), a live waveform with vocal and mix markers, the multitrack segue timeline with gain automation, a back-timed drag-and-drop log, hour clock, hot carts, insert break, live read, program meters with gain reduction |
 | **Log** | Every hour with the music director's reasons; regenerate any hour |
-| **Library** | Search/filter, explicit and clean badges, intro, ending and BPM, the waveform marker editor, monochrome import (songs, albums, artist top tracks), song facts (genre, vocal, popularity), AI and catalog discovery, categories and rotation rules |
+| **Library** | Search/filter, explicit and clean badges, chart positions, intro, ending and BPM, the waveform marker editor, song info (facts, charts, story), monochrome import (songs, albums, artist top tracks), charts (any chart, or any Hot 100 week since 1958, with one-click adds), discovery from charts, the AI and related artists, categories and rotation rules |
 | **Clocks** | Hour-clock editor with a pie view and the paintable weekly grid |
 | **Engineering** | Presets, live processor controls, bypass, LUFS readouts and history, true peak, phase correlation, ⅓-octave spectrum, goniometer, per-band gain reduction, streaming deck buffers |
 | **DJs** | Dayparts and personas (style, voice, speed), with a sample break written and voiced on demand |
-| **Imaging** | Sweeper creator, imaging voice, music beds and auto-bed, and the imaging library (FX style, pin, auto badge, upload) |
+| **Imaging** | Sweeper creator, imaging voice, music beds and auto-bed, bulk import of produced imaging (files, folders, drag and drop), and the imaging library (FX style, pin, auto and imported badges, upload) |
 | **Spots** | Advertisers, spots, flights and affidavits |
 | **Station** | Name, logo, slogan, call letters, socials, market locations, time zones, and a live test of the keyless feeds |
 | **Stream / AI / Settings** | Stream links and Icecast relay; status of every AI provider, connection test and the AI programmer; voice, broadcast standards, transitions, production and sources |
 
-The top bar shows the station clock with its zone, the top-of-hour countdown, the ON AIR tally, a program meter, and the AI, voice, bed and listener status. The layout works on phones.
+The top bar shows the station clock with its zone, the top-of-hour countdown, the ON AIR tally, a program meter, and the AI, voice, bed and listener status.
+
+**On phones and tablets** the studio is fully usable:
+
+- a bottom tab bar (Studio, Log, Library, Imaging), with every other page one tap away under *More*;
+- editable tables become cards;
+- inputs are sized for touch and don't zoom on iOS;
+- dialogs open full screen.
+
+It installs to the home screen as an app named after your station. The listener page puts the now-playing song on the lock screen.
 
 ---
 

@@ -1,10 +1,44 @@
 // Imaging (voice, sweeper creator, imaging library, music beds / auto-bed) and commercials.
 
-import { $, $$, esc, state, api, run, toast, bus, opt, input, check, collect, rowsToObjects, save, play, uploadFile, stationTime, TYPE_LABEL } from './core.js';
+import { $, $$, esc, state, api, run, toast, bus, opt, input, check, collect, rowsToObjects, save, play, uploadFile, uploadFiles, stationTime, TYPE_LABEL } from './core.js';
 
 const IMG_TYPES = ['toh_id', 'id', 'sweeper', 'liner', 'promo', 'bed'];
 const FX = [['', 'Auto'], ['punch', 'Punch'], ['riser', 'Riser'], ['smooth', 'Smooth'], ['stutter', 'Stutter'], ['music', 'Over music'], ['dry', 'Dry']];
-const ui = { job: null, beds: null };
+const ui = { job: null, beds: null, importing: null };
+const AUDIO = /\.(mp3|wav|aiff?|flac|m4a|aac|ogg|opus|wma)$/i;
+
+/** Import produced imaging files one by one (each is checked and typed from its name on the server). */
+async function importFiles(files, type = '') {
+  files = files.filter((f) => AUDIO.test(f.name) || f.type.startsWith('audio/'));
+  if (!files.length) { toast('No audio files there', true); return; }
+  ui.importing = { done: 0, total: files.length, failed: [] };
+  const counts = {};
+  for (const f of files) {
+    paintImport();
+    try {
+      const body = f.type ? f : new Blob([f], { type: 'application/octet-stream' }); // some formats (AIFF, FLAC) arrive untyped
+      const r = await api('POST', `/api/imaging/import?${new URLSearchParams({ name: f.relPath || f.name, type })}`, undefined, body);
+      counts[r.item.type] = (counts[r.item.type] || 0) + 1;
+    } catch (e) { ui.importing.failed.push(`${f.name}: ${e.message}`); }
+    ui.importing.done++;
+  }
+  paintImport();
+  const summary = Object.entries(counts).map(([t, n]) => `${n} ${t === 'bed' ? 'bed' : TYPE_LABEL[t] || t}${n === 1 ? '' : 's'}`).join(', ');
+  toast(summary ? `Imported ${summary}` : 'Nothing imported', !summary);
+  state.B = await api('GET', '/api/bootstrap');
+  ui.importing = ui.importing.failed.length ? ui.importing : null;
+  ui.beds = await api('GET', '/api/beds').catch(() => ui.beds);
+  bus.emit('rerender');
+}
+
+function importHtml() {
+  const j = ui.importing;
+  if (!j) return '';
+  return `<div class="progress" style="margin:8px 0"><div style="width:${(100 * j.done) / Math.max(1, j.total)}%"></div></div>
+    <div class="small muted">${j.done < j.total ? `Importing ${j.done + 1} of ${j.total}…` : `Imported ${j.total - j.failed.length} of ${j.total}`}</div>
+    ${j.failed.map((f) => `<div class="small" style="color:var(--red)">✗ ${esc(f)}</div>`).join('')}`;
+}
+function paintImport() { const el = $('#impJob'); if (el) el.innerHTML = importHtml(); }
 
 async function upload(accept = 'audio/*') {
   const f = await uploadFile(accept);
@@ -15,16 +49,16 @@ async function upload(accept = 'audio/*') {
 function imgRow(i) {
   const bed = i.type === 'bed';
   return `<tr data-id="${i.id}" class="${i.enabled ? '' : 'off'}">
-    <td><select data-f="type">${IMG_TYPES.map((t) => opt(t, t === 'bed' ? 'Music bed' : TYPE_LABEL[t], i.type)).join('')}</select></td>
-    <td><input data-f="name" value="${esc(i.name)}">
-      <div class="small">${i.auto ? `<span class="badge auto" title="Written by the sweeper creator ${i.createdAt ? new Date(i.createdAt).toLocaleDateString() : ''}">auto</span>` : ''}${i.theme ? ` <span class="muted">${esc(i.theme)}</span>` : ''}${i.expires ? ` <span class="muted">· until ${esc(i.expires)}</span>` : ''}</div></td>
-    <td>${bed ? '<span class="small muted">Plays under talk (see Music beds)</span><input data-f="text" type="hidden" value="">' : `<input data-f="text" value="${esc(i.text || '')}" placeholder="Copy with {name} {frequency} {callSign} {market} {slogan}">`}</td>
-    <td>${bed ? '<input data-f="fx" type="hidden" value="">' : `<select data-f="fx">${FX.map(([v, l]) => opt(v, l, i.fx || '')).join('')}</select>`}</td>
-    <td class="row nowrap"><input data-f="file" type="hidden" value="${esc(i.file || '')}"><span class="small muted fname" data-role="fname" title="${esc(i.file || '')}">${i.file ? 'uploaded' : bed ? '—' : 'voiced'}</span>
-      <button class="icon" data-action="upload" title="Upload produced audio">⤒</button>${i.file ? '<button class="icon" data-action="clearFile" title="Use the voiced copy instead">✕</button>' : ''}</td>
-    <td title="Pinned pieces are never retired by the weekly refresh"><input data-f="pinned" type="checkbox" ${i.pinned ? 'checked' : ''} ${i.auto ? '' : 'disabled'}></td>
-    <td><input data-f="enabled" type="checkbox" ${i.enabled ? 'checked' : ''}></td>
-    <td class="row nowrap"><button class="icon" data-action="previewImaging" title="Produce &amp; preview">▶</button><button class="icon" data-action="fireCart" data-id="${i.id}" title="Fire on air now">🔥</button><button class="icon danger" data-action="delRow">✕</button></td>
+    <td data-label="Type"><select data-f="type">${IMG_TYPES.map((t) => opt(t, t === 'bed' ? 'Music bed' : TYPE_LABEL[t], i.type)).join('')}</select></td>
+    <td data-label="Name"><input data-f="name" value="${esc(i.name)}">
+      <div class="small">${i.imported ? `<span class="badge clean" title="Imported ${i.importedAt ? new Date(i.importedAt).toLocaleDateString() : ''}">imported${i.duration ? ` · ${i.duration}s` : ''}</span>` : ''}${i.auto ? `<span class="badge auto" title="Written by the sweeper creator ${i.createdAt ? new Date(i.createdAt).toLocaleDateString() : ''}">auto</span>` : ''}${i.theme ? ` <span class="muted">${esc(i.theme)}</span>` : ''}${i.expires ? ` <span class="muted">· until ${esc(i.expires)}</span>` : ''}</div></td>
+    <td data-label="Copy" class="wide">${bed ? '<span class="small muted">Plays under talk (see Music beds)</span><input data-f="text" type="hidden" value="">' : `<input data-f="text" value="${esc(i.text || '')}" placeholder="Copy with {name} {frequency} {callSign} {market} {slogan}">`}</td>
+    <td data-label="FX">${bed ? '<input data-f="fx" type="hidden" value="">' : `<select data-f="fx">${FX.map(([v, l]) => opt(v, l, i.fx || '')).join('')}</select>`}</td>
+    <td data-label="Audio"><div class="row nowrap"><input data-f="file" type="hidden" value="${esc(i.file || '')}"><span class="small muted fname" data-role="fname" title="${esc(i.file || '')}">${i.file ? 'uploaded' : bed ? '—' : 'voiced'}</span>
+      <button class="icon" data-action="upload" title="Upload produced audio">⤒</button>${i.file ? '<button class="icon" data-action="clearFile" title="Use the voiced copy instead">✕</button>' : ''}</div></td>
+    <td data-label="Pinned" title="Pinned pieces are never retired by the weekly refresh"><input data-f="pinned" type="checkbox" ${i.pinned ? 'checked' : ''} ${i.auto ? '' : 'disabled'}></td>
+    <td data-label="On"><input data-f="enabled" type="checkbox" ${i.enabled ? 'checked' : ''}></td>
+    <td class="acts"><div class="row nowrap"><button class="icon" data-action="previewImaging" title="Produce &amp; preview">▶</button><button class="icon" data-action="fireCart" data-id="${i.id}" title="Fire on air now">🔥</button><button class="icon danger" data-action="delRow">✕</button></div></td>
   </tr>`;
 }
 
@@ -101,9 +135,19 @@ export const imaging = {
         <div id="beds">${bedsHtml()}</div>
       </div>
     </div>
-    <div class="card" style="margin-top:14px">
-      <div class="row" style="margin-bottom:8px"><h2 style="margin:0">Imaging library</h2><span class="spacer"></span><span class="small muted">${B.imaging.items.length} pieces</span></div>
-      <div class="table-wrap"><table><thead><tr><th>Type</th><th>Name</th><th>Copy</th><th>FX</th><th>Audio</th><th title="Pinned">📌</th><th>On</th><th></th></tr></thead><tbody id="imgRows">
+    <div class="card" style="margin-top:14px" id="imgLib">
+      <div class="row wrap" style="margin-bottom:8px"><h2 style="margin:0">Imaging library</h2><span class="spacer"></span><span class="small muted">${B.imaging.items.length} pieces${B.imaging.items.some((i) => i.imported) ? ` · ${B.imaging.items.filter((i) => i.imported).length} imported` : ''}</span></div>
+      <div class="dropzone" id="impDrop">
+        <div><b>Import your produced imaging</b> <span class="small muted">TOH/legal IDs, station IDs, sweepers, liners, promos and beds (MP3, WAV, AIFF, FLAC, M4A). Drop files or a whole folder here. The type is read from file and folder names like “TOH”, “Legal ID”, “Sweeper” or “Liner”, and you can change it below.</span></div>
+        <div class="row wrap">
+          <select id="impType" style="max-width:190px"><option value="">Type: detect from name</option>${IMG_TYPES.map((t) => opt(t, t === 'bed' ? 'Music bed' : TYPE_LABEL[t], '')).join('')}</select>
+          <button class="primary" data-action="importFiles">⤒ Import files</button><button data-action="importFolder">📁 Import a folder</button>
+          <span class="spacer"></span>
+          <label style="margin:0">On air</label><select id="impPref" style="max-width:260px">${opt('prefer', 'Imported pieces replace voiced copy of the same type', B.settings.importedImaging || 'prefer')}${opt('mix', 'Mix imported and voiced pieces', B.settings.importedImaging || 'prefer')}</select>
+        </div>
+        <div id="impJob">${importHtml()}</div>
+      </div>
+      <div class="table-wrap"><table class="stacktable"><thead><tr><th>Type</th><th>Name</th><th>Copy</th><th>FX</th><th>Audio</th><th title="Pinned">📌</th><th>On</th><th></th></tr></thead><tbody id="imgRows">
       ${B.imaging.items.map(imgRow).join('')}
       </tbody></table></div>
       <div class="row" style="margin-top:10px"><button data-action="addImaging">+ Imaging</button><span class="spacer"></span><button class="primary" data-action="saveImaging">Save imaging</button></div>
@@ -112,6 +156,19 @@ export const imaging = {
   mount() {
     api('GET', '/api/beds').then((r) => { ui.beds = r; const el = $('#beds'); if (el) el.innerHTML = bedsHtml(); }).catch((e) => toast(e.message, true));
     api('GET', '/api/imaging/create').then((j) => { if (j.running || j.created?.length) { ui.job = j; const el = $('#crJob'); if (el) el.innerHTML = jobHtml(j); } }).catch(() => {});
+    const drop = $('#impDrop');
+    if (drop) {
+      drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('over'); };
+      drop.ondragleave = () => drop.classList.remove('over');
+      drop.ondrop = async (e) => {
+        e.preventDefault();
+        drop.classList.remove('over');
+        importFiles(await droppedFiles(e.dataTransfer), $('#impType').value);
+      };
+    }
+    $('#impPref')?.addEventListener('change', async (e) => {
+      try { state.B = await api('PUT', '/api/settings', { importedImaging: e.target.value }); toast('Saved'); } catch (err) { toast(err.message, true); }
+    });
     const onInput = (e) => { if (e.target.dataset.k === 'levelDb') $('#bedLvl').textContent = `${e.target.value} dB`; };
     document.addEventListener('input', onInput);
     const offs = [
@@ -137,6 +194,8 @@ export const imaging = {
       await save('imaging', { ...state.B.imaging, voice: { ...state.B.imaging.voice, ...voice }, items: readItems() }, 'Imaging saved');
       bus.emit('rerender');
     },
+    importFiles: async () => importFiles(await uploadFiles('audio/*'), $('#impType').value),
+    importFolder: async () => importFiles(await uploadFiles('', { directory: true }), $('#impType').value),
     upload: async (b) => {
       const r = await upload();
       if (!r) return;
@@ -179,22 +238,43 @@ export const imaging = {
   },
 };
 
+/** Files from a drop, walking into dropped folders (keeping their paths, which name the imaging type). */
+async function droppedFiles(dt) {
+  const out = [];
+  const walk = async (entry, prefix) => {
+    if (entry.isFile) {
+      const f = await new Promise((r) => entry.file(r, () => r(null)));
+      if (f) out.push(Object.assign(f, { relPath: `${prefix}${f.name}` }));
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (;;) {
+        const batch = await new Promise((r) => reader.readEntries(r, () => r([])));
+        if (!batch.length) break;
+        for (const e of batch) await walk(e, `${prefix}${entry.name}/`);
+      }
+    }
+  };
+  const entries = [...(dt.items || [])].map((i) => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (entries.length) { for (const e of entries) await walk(e, ''); } else out.push(...[...dt.files].map((f) => Object.assign(f, { relPath: f.name })));
+  return out;
+}
+
 // ------------------------------------------------------------------ commercials
 
 function spotRow(s) {
   const B = state.B;
   return `<tr data-id="${s.id}">
-    <td><select data-f="advertiserId">${B.advertisers.map((a) => opt(a.id, a.name, s.advertiserId)).join('')}</select></td>
-    <td><input data-f="title" value="${esc(s.title)}"></td>
-    <td><textarea data-f="text" rows="2" style="min-height:40px;min-width:220px" placeholder="Script (voiced if there's no audio file)">${esc(s.text || '')}</textarea></td>
-    <td class="row nowrap"><input data-f="file" type="hidden" value="${esc(s.file || '')}"><span class="small muted" data-role="fname">${s.file ? 'uploaded' : 'voiced'}</span><button class="icon" data-action="upload" title="Upload produced spot">⤒</button></td>
-    <td><input data-f="durationSec" type="number" value="${s.durationSec || 30}" style="width:64px"></td>
-    <td><input data-f="startDate" type="date" value="${esc(s.startDate || '')}"></td>
-    <td><input data-f="endDate" type="date" value="${esc(s.endDate || '')}"></td>
-    <td><input data-f="maxPerDay" type="number" value="${s.maxPerDay || 0}" style="width:64px" title="0 = unlimited"></td>
-    <td><select data-f="dayparts" multiple size="2" style="min-width:120px">${B.dayparts.map((d) => `<option value="${d.id}" ${(s.dayparts || []).includes(d.id) ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></td>
-    <td><input data-f="enabled" type="checkbox" ${s.enabled !== false ? 'checked' : ''}></td>
-    <td class="row nowrap"><button class="icon" data-action="previewSpot" title="Preview">▶</button><button class="icon danger" data-action="delRow">✕</button></td>
+    <td data-label="Advertiser"><select data-f="advertiserId">${B.advertisers.map((a) => opt(a.id, a.name, s.advertiserId)).join('')}</select></td>
+    <td data-label="Title"><input data-f="title" value="${esc(s.title)}"></td>
+    <td data-label="Script" class="wide"><textarea data-f="text" rows="2" style="min-height:40px;min-width:220px" placeholder="Script (voiced if there's no audio file)">${esc(s.text || '')}</textarea></td>
+    <td data-label="Audio"><div class="row nowrap"><input data-f="file" type="hidden" value="${esc(s.file || '')}"><span class="small muted" data-role="fname">${s.file ? 'uploaded' : 'voiced'}</span><button class="icon" data-action="upload" title="Upload produced spot">⤒</button></div></td>
+    <td data-label="Length (s)"><input data-f="durationSec" type="number" value="${s.durationSec || 30}" style="width:64px"></td>
+    <td data-label="Starts"><input data-f="startDate" type="date" value="${esc(s.startDate || '')}"></td>
+    <td data-label="Ends"><input data-f="endDate" type="date" value="${esc(s.endDate || '')}"></td>
+    <td data-label="Max/day"><input data-f="maxPerDay" type="number" value="${s.maxPerDay || 0}" style="width:64px" title="0 = unlimited"></td>
+    <td data-label="Dayparts" class="wide"><select data-f="dayparts" multiple size="2" style="min-width:120px">${B.dayparts.map((d) => `<option value="${d.id}" ${(s.dayparts || []).includes(d.id) ? 'selected' : ''}>${esc(d.name)}</option>`).join('')}</select></td>
+    <td data-label="On"><input data-f="enabled" type="checkbox" ${s.enabled !== false ? 'checked' : ''}></td>
+    <td class="acts"><div class="row nowrap"><button class="icon" data-action="previewSpot" title="Preview">▶</button><button class="icon danger" data-action="delRow">✕</button></div></td>
   </tr>`;
 }
 
@@ -217,7 +297,7 @@ export const spots = {
     </div>
     <div class="card" style="margin-top:14px">
       <h2>Spots</h2>
-      <div class="table-wrap"><table><thead><tr><th>Advertiser</th><th>Title</th><th>Script</th><th>Audio</th><th>Len (s)</th><th>Start</th><th>End</th><th>Max/day</th><th>Dayparts</th><th>On</th><th></th></tr></thead><tbody id="spotRows">
+      <div class="table-wrap"><table class="stacktable"><thead><tr><th>Advertiser</th><th>Title</th><th>Script</th><th>Audio</th><th>Len (s)</th><th>Start</th><th>End</th><th>Max/day</th><th>Dayparts</th><th>On</th><th></th></tr></thead><tbody id="spotRows">
       ${B.spots.map(spotRow).join('')}
       </tbody></table></div>
       <div class="row" style="margin-top:10px"><button data-action="addSpot" ${B.advertisers.length ? '' : 'disabled'}>+ Spot</button>${B.advertisers.length ? '' : '<span class="small muted">Add an advertiser first.</span>'}<span class="spacer"></span><button class="primary" data-action="saveSpots">Save spots</button></div>

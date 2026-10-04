@@ -52,7 +52,10 @@ export function defaultDb() {
       useClaudeForMusic: true,
       cleanOnly: true, // broadcast-safe: explicit songs are swapped for clean radio edits or never aired
       allowDiscovery: true, // let the AI pull new music from monochrome when the library runs thin
-      discoveryMode: 'auto', // auto | ai | catalog: how new songs are found (catalog = related artists from open data, no AI knowledge needed)
+      charts: [], // chart ids to follow; empty = the format's charts
+      chartRotation: true, // current formats: chart hits move between power, current and recurrent
+      importedImaging: 'prefer', // prefer | mix: imported imaging files replace voiced copy of the same type, or rotate with it
+      discoveryMode: 'auto', // auto | charts | ai | catalog: how new songs are found (charts and catalog need no AI music knowledge)
       monochromeBase: 'https://tracks.monochrome.st',
       // Voice: 'auto' = ElevenLabs if keyed, else the free local Kokoro voice, else OpenAI
       ttsProvider: 'auto',

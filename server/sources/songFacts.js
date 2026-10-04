@@ -9,6 +9,7 @@
 // Combined with Valhalla's own audio analysis (tempo, loudness, intro, ending) into `track.facts`.
 
 import { userAgent } from '../feeds/http.js';
+import { chartLine } from './charts.js';
 
 const DEEZER = 'https://api.deezer.com';
 const MB = 'https://musicbrainz.org/ws/2';
@@ -126,7 +127,8 @@ export function originalYear(years, exact = false) {
   return ys.find((y, i) => ys.slice(i + 1).some((z) => z - y <= 1)) ?? ys[0];
 }
 
-async function itunesGenre(t) {
+/** Primary genre on iTunes (one quick keyless request). */
+export async function itunesGenre(t) {
   const r = await get(`https://itunes.apple.com/search?term=${encodeURIComponent(`${t.artist} ${t.title}`)}&entity=song&limit=5`);
   const want = norm(t.title);
   const hit = (r.results || []).find((x) => norm(x.trackName) === want) || null;
@@ -188,6 +190,7 @@ export function factLine(t, { at = Date.now() } = {}) {
     f.popularity != null ? `popularity ${f.popularity}` : null,
     intro != null ? `intro ${Math.round(intro)}s` : 'intro unknown',
     end ? `${end} end` : null,
+    chartLine(t) || null,
     last,
   ].filter(Boolean).join(', ');
 }

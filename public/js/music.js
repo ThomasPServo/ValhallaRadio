@@ -1,11 +1,11 @@
-// Program log and music library (search, monochrome import, Claude discovery, categories,
+// Program log and music library (search, monochrome import, charts, discovery, song info, categories,
 // clean-version sweep and the waveform marker editor).
 
 import { $, $$, esc, fmtDur, state, api, run, toast, bus, stationTime, catChip, catOptions, opt, input, collect, rowsToObjects, save, play, modal, closeModal } from './core.js';
 import { itemRow } from './studio.js';
 import { drawWaveform } from './widgets.js';
 
-const ui = { tab: 'library', q: '', category: '', results: '', lib: [] };
+const ui = { tab: 'library', q: '', category: '', results: '', lib: [], chart: null, chartDate: '', chartData: null };
 
 // ------------------------------------------------------------------ program log
 function logHtml() {
@@ -41,7 +41,7 @@ export const log = {
 };
 
 // ------------------------------------------------------------------ library
-const TABS = [['library', '📚 Library'], ['search', '🔎 Add from monochrome'], ['discover', '🤖 Discover with Claude'], ['rules', '⚖️ Categories & rotation']];
+const TABS = [['library', '📚 Library'], ['charts', '📈 Charts'], ['search', '🔎 Add from monochrome'], ['discover', '🧭 Discover'], ['rules', '⚖️ Categories & rotation']];
 
 function libraryTab() {
   const B = state.B;
@@ -55,7 +55,7 @@ function libraryTab() {
         <select id="libCat" style="max-width:220px"><option value="">All categories</option>${catOptions(ui.category)}</select>
         <span class="spacer"></span><span class="small muted" id="libCount"></span>
       </div>
-      <div class="table-wrap"><table class="libtable"><thead><tr><th></th><th>Song</th><th>Category</th><th title="Instrumental intro before the vocals — the DJ talks up to here">Intro</th><th title="Cold (C) or fade (F) ending">End</th><th>BPM</th><th>Plays</th><th>Last played</th><th></th></tr></thead>
+      <div class="table-wrap"><table class="libtable"><thead><tr><th></th><th>Song</th><th>Category</th><th class="hide-sm" title="Instrumental intro before the vocals — the DJ talks up to here">Intro</th><th class="hide-sm" title="Cold (C) or fade (F) ending">End</th><th class="hide-sm">BPM</th><th class="hide-sm">Plays</th><th class="hide-sm">Last played</th><th></th></tr></thead>
       <tbody id="libRows"><tr><td colspan="9" class="empty"><span class="spin"></span></td></tr></tbody></table></div>
     </div>`;
 }
@@ -76,14 +76,14 @@ function libRow(t) {
     <td><button class="icon" data-action="preview" data-id="${t.id}" title="Preview">▶</button></td>
     <td><div class="songcell"><div class="thumb" style="background-image:url('${esc(t.artwork || '')}')"></div><div style="min-width:0">
       <b>${esc(t.title)}</b> ${t.explicit ? '<span class="badge e" title="Explicit version">E</span>' : t.note === 'clean version' ? '<span class="badge clean" title="Swapped for the clean radio edit">clean</span>' : ''}
-      <div class="muted small">${esc(t.artist)}${t.year ? ` · ${t.year}` : ''}${t.facts?.genre ? ` · ${esc(t.facts.genre)}` : ''}${t.facts?.voice ? ` · ${esc(t.facts.voice)}` : ''}${t.facts?.popularity != null ? ` · <span title="Popularity (Deezer)">★${t.facts.popularity}</span>` : ''}${t.album ? ` · ${esc(t.album)}` : ''}</div></div></div></td>
+      <div class="muted small">${t.chart ? `<span class="badge chart" title="${esc(t.chart.chart)}">#${t.chart.rank}</span> ` : t.chartPeak ? `<span class="badge" title="Chart peak (${esc(t.chartPeak.chart)})">pk #${t.chartPeak.peak}</span> ` : ''}${esc(t.artist)}${t.year ? ` · ${t.year}` : ''}${t.facts?.genre ? ` · ${esc(t.facts.genre)}` : ''}${t.facts?.voice ? ` · ${esc(t.facts.voice)}` : ''}${t.facts?.popularity != null ? ` · <span title="Popularity (Deezer)">★${t.facts.popularity}</span>` : ''}${t.album ? ` · ${esc(t.album)}` : ''}</div></div></div></td>
     <td><select data-change="trackCat">${catOptions(t.category)}</select></td>
-    <td>${introCell(t)}</td>
-    <td>${end ? `<span class="badge ${end}">${end === 'cold' ? 'C' : 'F'}</span>` : '<span class="muted">—</span>'}</td>
-    <td class="num small">${a.headTempo?.bpm ? Math.round(a.headTempo.bpm) : '—'}</td>
-    <td class="small num">${t.plays || 0}</td>
-    <td class="small muted">${t.lastPlayed ? stationTime(t.lastPlayed).slice(0, 5) + ' ' + new Date(t.lastPlayed).toLocaleDateString() : 'never'}</td>
-    <td class="row nowrap"><button class="icon" title="Edit markers (intro, outro, mix point)" data-action="markers" data-id="${t.id}">✎</button><button class="icon" title="Play next" data-action="playNext" data-id="${t.id}">⏩</button><button class="icon" title="${t.disabled ? 'Enable' : 'Disable'}" data-action="toggleTrack" data-id="${t.id}">${t.disabled ? '◻' : '⏸'}</button><button class="icon danger" title="Remove" data-action="delTrack" data-id="${t.id}">✕</button></td>
+    <td class="hide-sm">${introCell(t)}</td>
+    <td class="hide-sm">${end ? `<span class="badge ${end}">${end === 'cold' ? 'C' : 'F'}</span>` : '<span class="muted">—</span>'}</td>
+    <td class="num small hide-sm">${a.headTempo?.bpm ? Math.round(a.headTempo.bpm) : '—'}</td>
+    <td class="small num hide-sm">${t.plays || 0}</td>
+    <td class="small muted hide-sm">${t.lastPlayed ? stationTime(t.lastPlayed).slice(0, 5) + ' ' + new Date(t.lastPlayed).toLocaleDateString() : 'never'}</td>
+    <td class="row nowrap acts"><button class="icon" title="Song info: facts, charts and story" data-action="songInfo" data-artist="${esc(t.artist)}" data-title="${esc(t.title)}">ℹ</button><button class="icon" title="Edit markers (intro, outro, mix point)" data-action="markers" data-id="${t.id}">✎</button><button class="icon" title="Play next" data-action="playNext" data-id="${t.id}">⏩</button><button class="icon" title="${t.disabled ? 'Enable' : 'Disable'}" data-action="toggleTrack" data-id="${t.id}">${t.disabled ? '◻' : '⏸'}</button><button class="icon danger" title="Remove" data-action="delTrack" data-id="${t.id}">✕</button></td>
   </tr>`;
 }
 
@@ -102,8 +102,88 @@ function resultTrack(t) {
     <div class="row nowrap"><button class="icon" data-action="preview" data-id="${t.id}">▶</button><button class="icon" data-action="addTrack" data-track='${esc(JSON.stringify(t))}'>＋</button></div></div>`;
 }
 
+// ------------------------------------------------------------------ charts
+function chartsTab() {
+  const C = state.B.charts || { available: [], station: [] };
+  if (!ui.chart) ui.chart = C.station[0] || 'hot100';
+  const st = C.status || {};
+  const others = C.available.filter((c) => !C.station.includes(c.id));
+  return `
+    <div class="card">
+      <div class="row wrap" style="margin-bottom:10px">
+        <select id="chartId" style="max-width:260px">
+          <optgroup label="Your format's charts">${C.station.map((id) => opt(id, C.available.find((c) => c.id === id)?.name || id, ui.chart)).join('')}</optgroup>
+          <optgroup label="Other charts">${others.map((c) => opt(c.id, c.name, ui.chart)).join('')}</optgroup>
+        </select>
+        <input id="chartDate" type="date" value="${esc(ui.chartDate)}" title="A past week (Billboard Hot 100 history goes back to 1958)" style="max-width:170px;${ui.chart === 'hot100' ? '' : 'display:none'}">
+        <button data-action="loadChart">Show</button>
+        <span class="spacer"></span>
+        <label style="margin:0">Add to</label><select id="chartCat" style="max-width:200px">${catOptions('B')}</select>
+        <button class="primary" data-action="addChartSongs">Add selected</button>
+      </div>
+      <p class="hint" style="margin-top:0">Keyless chart data. Songs in your library show their chart position to the music director and the DJ${st.updatedAt ? ` (updated ${new Date(st.updatedAt).toLocaleString()}: ${st.onChart} of your songs are charting)` : ''}. ${state.B.settings.chartRotation !== false ? 'Chart rotation is on: in current formats, top-15 songs move to power rotation, other chart songs to current, and songs that drop off to recurrent.' : ''}
+        <button class="link" data-action="refreshCharts">Refresh now</button>${st.moved?.length ? ` <details style="display:inline"><summary class="small">${st.moved.length} rotation move(s)</summary>${st.moved.map((m) => `<div class="small muted">${esc(m)}</div>`).join('')}</details>` : ''}</p>
+      <div id="chartRows">${chartRowsHtml()}</div>
+    </div>`;
+}
+
+function chartRowsHtml() {
+  const c = ui.chartData;
+  if (!c) return '<div class="empty"><span class="spin"></span></div>';
+  if (!c.entries.length) return '<div class="empty muted">This chart is empty right now.</div>';
+  const move = (e) => (e.lastWeek == null ? (e.weeks === 1 ? '<span class="badge new">new</span>' : '') : e.lastWeek > e.rank ? `<span class="up">▲${e.lastWeek - e.rank}</span>` : e.lastWeek < e.rank ? `<span class="down">▼${e.rank - e.lastWeek}</span>` : '<span class="muted">=</span>');
+  return `<div class="small muted" style="margin-bottom:6px">${esc(c.name)}${c.date ? ` · week of ${esc(c.date)}` : ''} · <label class="nowrap" style="display:inline;margin:0"><input type="checkbox" id="chartAll"> select all missing</label></div>
+    <div class="table-wrap"><table class="charttable"><thead><tr><th></th><th>#</th><th></th><th>Song</th><th class="hide-sm">Peak</th><th class="hide-sm">Wks</th><th>Library</th><th></th></tr></thead><tbody>
+    ${c.entries.map((e, i) => `<tr>
+      <td>${e.trackId ? '' : `<input type="checkbox" class="chartPick" data-i="${i}">`}</td>
+      <td class="num"><b>${e.rank}</b></td><td class="small nowrap">${move(e)}</td>
+      <td><b>${esc(e.title)}</b><div class="small muted">${esc(e.artist)}${e.year ? ` · ${e.year}` : ''}</div></td>
+      <td class="num small hide-sm">${e.peak ?? ''}</td><td class="num small hide-sm">${e.weeks ?? ''}</td>
+      <td>${e.trackId ? catChip(e.category) : '<span class="muted small">—</span>'}</td>
+      <td><button class="icon" title="Song info" data-action="songInfo" data-artist="${esc(e.artist)}" data-title="${esc(e.title)}">ℹ</button></td></tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+async function loadChart() {
+  ui.chartData = null;
+  const rows = $('#chartRows');
+  if (rows) rows.innerHTML = chartRowsHtml();
+  try {
+    ui.chartData = await api('GET', `/api/charts/${ui.chart}${ui.chart === 'hot100' && ui.chartDate ? `?date=${ui.chartDate}` : ''}`);
+  } catch (e) { ui.chartData = { name: '', entries: [] }; toast(e.message, true); }
+  if ($('#chartRows')) {
+    $('#chartRows').innerHTML = chartRowsHtml();
+    const all = $('#chartAll');
+    if (all) all.onchange = () => $$('.chartPick').forEach((x) => { x.checked = all.checked; });
+  }
+}
+
+/** Facts, chart run and the story of a song, looked up from open data. */
+export async function openSongInfo(artist, title) {
+  const el = modal(`<div class="row"><div><h1>${esc(title)}</h1><p class="sub" style="margin:0">${esc(artist)}</p></div><span class="spacer"></span><button data-role="close">✕</button></div><div id="siBody" style="margin-top:12px"><span class="spin"></span> Looking it up…</div>`);
+  $('[data-role=close]', el).onclick = () => closeModal();
+  try {
+    const i = await api('GET', `/api/songinfo?${new URLSearchParams({ artist, title })}`);
+    const f = i.facts || {};
+    $('#siBody', el).innerHTML = `
+      <div class="kv">
+        <span>Year</span><span>${i.year || '—'}</span>
+        <span>Genres</span><span>${esc((f.genres || []).join(', ') || '—')}</span>
+        <span>Vocal</span><span>${esc(f.voice || '—')}</span>
+        <span>Tempo</span><span>${f.bpm ? `${f.bpm} BPM (${esc(f.tempo)})` : '—'}</span>
+        <span>Energy</span><span>${f.energy ? `${f.energy} / 5 (estimated)` : '—'}</span>
+        <span>Popularity</span><span>${f.popularity != null ? `${f.popularity} / 100` : '—'}</span>
+        <span>Charts</span><span>${i.chart ? `#${i.chart.rank} on ${esc(i.chart.chart)}${i.chart.weeks ? `, ${i.chart.weeks} weeks` : ''}` : i.chartPeak ? `peaked at #${i.chartPeak.peak} (${esc(i.chartPeak.chart)})` : 'not on your charts this week'}</span>
+        <span>In library</span><span>${i.inLibrary ? 'yes' : 'no'}</span>
+      </div>
+      ${i.story ? `<h3 style="margin-top:14px">About the song</h3><p>${esc(i.story.extract)}</p><p class="small muted">From Wikipedia${i.story.url ? ` · <a href="${esc(i.story.url)}" target="_blank" rel="noopener">read more</a>` : ''}</p>` : '<p class="small muted" style="margin-top:12px">No encyclopedia entry found for this song.</p>'}
+      <p class="small muted">Sources: ${esc((f.sources || []).join(', ') || 'none')}. The music director and DJ see these same facts, so even an AI that doesn't know the song programs it correctly.</p>`;
+  } catch (e) { $('#siBody', el).innerHTML = `<p class="muted">${esc(e.message)}</p>`; }
+}
+
 const TABBODY = {
   library: libraryTab,
+  charts: chartsTab,
   search: () => `
     <div class="card">
       <div class="row" style="margin-bottom:12px">
@@ -117,13 +197,13 @@ const TABBODY = {
     </div>`,
   discover: () => `
     <div class="card stack" style="max-width:760px">
-      <p class="muted">Claude suggests songs that fit your format and market; each one is matched on monochrome and added. This also happens on its own when a category runs thin.</p>
+      <p class="muted">Finds songs that fit your format: this week's chart hits (or Billboard hits from the category's era), suggestions from the AI, and songs by artists related to the ones you play. Every song is matched on monochrome before it's added. This also happens on its own when a category runs thin. Settings → AI chooses which of these to use.</p>
       <div class="grid cols-3">
         <div><label>Category</label><select id="discCat">${catOptions('N')}</select></div>
         <div><label>How many</label><input id="discCount" type="number" value="12" min="1" max="40"></div>
       </div>
       <div><label>Direction (optional)</label><input id="discGuide" placeholder="e.g. 90s alternative hits, female vocalists, songs for a summer weekend"></div>
-      <div class="row"><button class="primary" data-action="discover" ${state.B.capabilities.claude ? '' : 'disabled'}>Discover music</button>${state.B.capabilities.claude ? '' : '<span class="small muted">Connect an AI in Settings first (Claude Code, Codex, LM Studio or an API key).</span>'}</div>
+      <div class="row"><button class="primary" data-action="discover">Discover music</button>${state.B.capabilities.claude ? '' : '<span class="small muted">No AI connected: charts and related artists only.</span>'}</div>
       <div id="discResults"></div>
     </div>`,
   rules: () => {
@@ -166,6 +246,10 @@ export const library = {
       $('#libQ').oninput = (e) => { ui.q = e.target.value; clearTimeout(ui.t); ui.t = setTimeout(loadLibrary, 250); };
       $('#libCat').onchange = (e) => { ui.category = e.target.value; loadLibrary(); };
     }
+    if (ui.tab === 'charts') {
+      $('#chartId').onchange = (e) => { ui.chart = e.target.value; $('#chartDate').style.display = ui.chart === 'hot100' ? '' : 'none'; loadChart(); };
+      if (!ui.chartData || ui.chartData.id !== ui.chart) loadChart(); else $('#chartRows').innerHTML = chartRowsHtml();
+    }
     if (ui.tab === 'search') $('#monoQ').onkeydown = (e) => { if (e.key === 'Enter') library.actions.monoSearch($('[data-action=monoSearch]')); };
     return () => offs.forEach((f) => f());
   },
@@ -182,6 +266,17 @@ export const library = {
     delTrack: async (b) => { if (!confirm('Remove this song from the library?')) return; await api('DELETE', `/api/library/${b.dataset.id}`); state.B.libraryCount--; loadLibrary(); },
     cleanSweep: (b) => run(b, () => api('POST', '/api/library/clean'), 'Looking for clean radio edits…'),
     markers: (b) => openMarkerEditor(b.dataset.id),
+    songInfo: (b) => openSongInfo(b.dataset.artist, b.dataset.title),
+    loadChart: () => { ui.chartDate = $('#chartDate')?.value || ''; loadChart(); },
+    refreshCharts: (b) => run(b, async () => { state.B.charts.status = await api('POST', '/api/charts/refresh'); bus.emit('rerender'); }, 'Chart positions updated'),
+    addChartSongs: (b) => run(b, async () => {
+      const picks = $$('.chartPick:checked').map((x) => ui.chartData.entries[Number(x.dataset.i)]);
+      if (!picks.length) throw new Error('Tick the songs to add first');
+      const r = await api('POST', '/api/charts/add', { category: $('#chartCat').value, songs: picks.map((e) => ({ artist: e.artist, title: e.title, note: `#${e.rank} on ${ui.chartData.short || ui.chartData.name}${ui.chartData.date ? ` (${ui.chartData.date})` : ''}` })) });
+      added(r);
+      if (r.missed?.length) toast(`Not found: ${r.missed.slice(0, 3).join('; ')}${r.missed.length > 3 ? '…' : ''}`, true);
+      loadChart();
+    }),
     monoSearch: (b) => run(b, async () => {
       const q = $('#monoQ').value.trim();
       if (!q) return;
@@ -204,7 +299,8 @@ export const library = {
     discover: (b) => run(b, async () => {
       const r = await api('POST', '/api/library/discover', { category: $('#discCat').value, count: Number($('#discCount').value), guidance: $('#discGuide').value });
       state.B.libraryCount += r.added.length;
-      $('#discResults').innerHTML = `<h3>Added ${r.added.length}</h3>${r.added.map((t) => `<div class="small">✅ ${esc(t.artist)} — ${esc(t.title)} <span class="muted">${esc(t.note || '')}</span></div>`).join('')}
+      const by = Object.entries(r.by || {}).filter(([, n]) => n).map(([k, n]) => `${n} from ${{ charts: 'charts', ai: 'the AI', catalog: 'related artists' }[k] || k}`).join(', ');
+      $('#discResults').innerHTML = `<h3>Added ${r.added.length}${by ? ` <span class="small muted">(${by})</span>` : ''}</h3>${r.added.map((t) => `<div class="small">✅ ${esc(t.artist)} — ${esc(t.title)} <span class="muted">${esc(t.note || '')}</span></div>`).join('')}
         ${r.missed?.length ? `<h3 style="margin-top:10px">Not found on monochrome</h3>${r.missed.map((m) => `<div class="small muted">✗ ${esc(m)}</div>`).join('')}` : ''}`;
     }),
     addCat: () => $('#catRows').insertAdjacentHTML('beforeend', '<tr><td><input data-f="id" style="width:50px"></td><td><input data-f="name"></td><td><input data-f="color" type="color" value="#64748b" style="width:44px;padding:2px"></td><td><input data-f="minRestHours" type="number" step="0.5" value="6" style="width:80px"></td><td><button class="icon danger" data-action="delRow">✕</button></td></tr>'),
