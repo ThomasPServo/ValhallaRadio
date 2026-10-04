@@ -18,11 +18,16 @@ export const KIND = {
 };
 
 const EST = { dj: 15, talk: 35, weather: 25, traffic: 25, news: 75, say: 15, toh_id: 8, id: 5, sweeper: 5, liner: 5, promo: 30, spot: 30 };
-const PENDING = new Set(['scheduled', 'preparing', 'ready']);
+const PENDING = new Set(['scheduled', 'preparing', 'ready', 'cued']);
 const IMAGING_FALLBACK = { toh_id: ['toh_id', 'id', 'sweeper'], id: ['id', 'toh_id', 'sweeper'], sweeper: ['sweeper', 'id'], liner: ['liner', 'sweeper', 'id'], promo: ['promo'] };
 
 export function estDuration(item) {
-  if (item.type === 'music') return item.duration || 210;
+  if (item.type === 'music') {
+    // airtime is up to the mix-out point, not the full file
+    const a = item.trackId ? library.findTrack(item.trackId)?.analysis : null;
+    if (a?.mixOut) return Math.max(30, a.mixOut - (a.startSec || 0));
+    return Math.max(30, (item.duration || 214) - 4);
+  }
   if (item.type === 'spot') return item.duration || 30;
   if (item.type === 'dj') return item.mode === 'talk' ? EST.talk : EST.dj;
   return EST[item.type] || 10;
@@ -30,7 +35,8 @@ export function estDuration(item) {
 
 function pickImaging(type) {
   for (const t of IMAGING_FALLBACK[type] || [type]) {
-    const pool = store.data.imaging.items.filter((i) => i.enabled && i.type === t && (i.text || i.file));
+    const today = zoned(new Date(), store.station.timezone).dateKey;
+    const pool = store.data.imaging.items.filter((i) => i.enabled && i.type === t && (i.text || i.file) && !(i.expires && i.expires < today)); // seasonal pieces retire themselves
     if (pool.length) {
       pool.sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
       const pick = pool[0];
@@ -281,7 +287,7 @@ export class Scheduler {
     const usedIds = new Set(this.allItems().filter((i) => i.trackId && i.status !== 'failed').map((i) => i.trackId));
     for (const catId of [...new Set(musicCats.length ? musicCats : cats.map((c) => c.id))].sort(() => Math.random() - 0.5)) {
       const category = cats.find((c) => c.id === catId) || { id: catId };
-      const t = candidatesFor(store.data.library, { at: now, plays, rotation: store.data.rotation, category }, 10).find((x) => !usedIds.has(x.id));
+      const t = candidatesFor(library.playable(), { at: now, plays, rotation: store.data.rotation, category }, 10).find((x) => !usedIds.has(x.id));
       if (t) {
         const it = { id: uid('it_'), hourKey: curKey, status: 'scheduled', type: 'music', category: catId, ...trackFields(t), why: 'filler', filler: true };
         if (l) l.items.push(it); else this.logs.set(curKey, { hourKey: curKey, startMs: hourStart(new Date(now), this.tz()), clockName: 'Filler', items: [it] });
@@ -297,7 +303,7 @@ export class Scheduler {
     const failed = new Set([...(it.failedIds || []), it.trackId]);
     const category = store.data.categories.find((c) => c.id === it.category) || { id: it.category };
     const usedIds = new Set(this.allItems().filter((i) => i.trackId).map((i) => i.trackId));
-    const t = candidatesFor(store.data.library, { at: Date.now(), plays: library.musicPlays(), rotation: store.data.rotation, category }, 20)
+    const t = candidatesFor(library.playable(), { at: Date.now(), plays: library.musicPlays(), rotation: store.data.rotation, category }, 20)
       .find((x) => !failed.has(x.id) && !usedIds.has(x.id));
     it.failedIds = [...failed];
     if (!t || it.failedIds.length > 3) {
@@ -322,6 +328,7 @@ export class Scheduler {
     return {
       previous,
       next: nextIt ? library.findTrack(nextIt.trackId) || nextIt : null,
+      nextItem: nextIt || null,
       afterStopset: lastNonImaging?.type === 'spot',
     };
   }
@@ -360,6 +367,22 @@ export class Scheduler {
     return false;
   }
 
+  /** Drag-and-drop: move a pending item so it sits right before `beforeId` (any hour). */
+  moveTo(id, beforeId) {
+    const it = this.findItem(id);
+    if (!it || !PENDING.has(it.status) || id === beforeId) return false;
+    const target = beforeId ? this.findItem(beforeId) : null;
+    if (target && !PENDING.has(target.status)) return false;
+    for (const l of this.logs.values()) { const i = l.items.indexOf(it); if (i >= 0) l.items.splice(i, 1); }
+    const destLog = this.logs.get(target ? target.hourKey : it.hourKey);
+    if (!destLog) return false;
+    it.hourKey = destLog.hourKey;
+    const at = target ? destLog.items.indexOf(target) : destLog.items.length;
+    destLog.items.splice(at, 0, it);
+    this.onChange();
+    return true;
+  }
+
   snapshot() {
     return this.sortedLogs().map((l) => ({
       hourKey: l.hourKey, startMs: l.startMs, clockName: l.clockName, daypart: l.daypart,
@@ -367,6 +390,7 @@ export class Scheduler {
         id: i.id, type: i.type, kind: KIND[i.type], status: i.status, title: i.title, artist: i.artist, artwork: i.artwork,
         duration: i.audioDuration || estDuration(i), category: i.category, why: i.why, script: i.script, error: i.error,
         trackId: i.trackId, estOffset: i.estOffset, airedAt: i.airedAt, mode: i.mode, filler: i.filler, inserted: i.inserted,
+        markers: i.markers || null, transition: i.transition || null, persona: i.persona,
       })),
     }));
   }

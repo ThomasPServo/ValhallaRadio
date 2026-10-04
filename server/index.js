@@ -12,15 +12,25 @@ import { Scheduler } from './scheduler/logs.js';
 import { Streamer } from './engine/streamer.js';
 import { Playout } from './engine/playout.js';
 import { probeFfmpeg, loadAudio } from './engine/audio.js';
-import { claudeAvailable } from './ai/claude.js';
+import { claudeAvailable, claudeStatus, checkClaudeCode, claudeText } from './ai/claude.js';
 import { discover } from './ai/musicDirector.js';
 import { writeBreak, personaFor, renderImagingText } from './ai/dj.js';
 import { designStation, applyDesign } from './ai/programmer.js';
-import { synthesize, ttsAvailable } from './voice/tts.js';
-import { geocode, marketWeather } from './feeds/weather.js';
+import { synthesize, ttsAvailable, activeProvider } from './voice/tts.js';
+import { kokoroStatus, installKokoro, installEvents, KOKORO_VOICES } from './voice/kokoro.js';
+import { produceElement } from './audio/production.js';
+import { PRESETS, resolveParams } from './audio/processor.js';
+import { analyzeTrack, trackDetail } from './audio/trackAnalyzer.js';
+import { formatList } from './setup/formats.js';
+import { applyFormat, buildLibrary, setupStatus, setupEvents } from './setup/setup.js';
+import { geocode, marketWeather, timezoneFor } from './feeds/weather.js';
 import { getNews } from './feeds/news.js';
 import { getTraffic } from './feeds/traffic.js';
-import { zoned } from './util/time.js';
+import { zoned, applyMarketTimezone, marketZones, validZone } from './util/time.js';
+import { findCleanVersion } from './sources/clean.js';
+import { bedList, chosenBedId, bedUrl, bedFile } from './audio/beds.js';
+import { BED_STYLES } from './audio/bedSynth.js';
+import { createImaging, imagingJobStatus, imagingEvents, startAutoImaging } from './audio/imagingCreator.js';
 
 const scheduler = new Scheduler();
 const streamer = new Streamer();
@@ -31,17 +41,20 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', true);
 
-// ------------------------------------------------------------------ public routes
+// ------------------------------------------------------------------ public routes (no login)
 app.get('/stream.mp3', (req, res) => {
   if (!engine.running) return res.status(503).send('Station is off air');
   streamer.handle(req, res);
 });
+function publicStation() {
+  const st = store.station;
+  return { name: st.name, callSign: st.callSign, frequency: st.frequency, slogan: st.slogan, logo: st.logo ? `/uploads/${st.logo}` : null, website: st.website, socials: st.socials, phone: st.phone };
+}
 app.get('/api/nowplaying', (req, res) => {
   res.set('Access-Control-Allow-Origin', '*');
   const s = engine.state();
-  const st = store.station;
   res.json({
-    station: { name: st.name, callSign: st.callSign, frequency: st.frequency, slogan: st.slogan },
+    station: publicStation(),
     onAir: s.running,
     now: s.now && { title: s.now.title, artist: s.now.artist, artwork: s.now.artwork, type: s.now.type },
     recent: store.data.history.filter((h) => h.type === 'music').slice(-10).reverse().map((h) => ({ title: h.title, artist: h.artist, at: h.at })),
@@ -49,6 +62,11 @@ app.get('/api/nowplaying', (req, res) => {
   });
 });
 app.get('/listen', (req, res) => res.sendFile(path.join(PUBLIC_DIR, 'listen.html')));
+app.get('/station-logo', (req, res) => {
+  const f = store.station.logo && path.join(UPLOAD_DIR, store.station.logo);
+  if (f && fs.existsSync(f)) return res.sendFile(f);
+  res.status(404).end();
+});
 
 // ------------------------------------------------------------------ admin auth
 function checkAuth(req) {
@@ -62,7 +80,7 @@ function checkAuth(req) {
 }
 app.use((req, res, next) => {
   if (checkAuth(req)) return next();
-  res.set('WWW-Authenticate', 'Basic realm="Valhalla Radio Studio"').status(401).send('Authentication required');
+  res.set('WWW-Authenticate', 'Basic realm="Valhalla Studio"').status(401).send('Authentication required');
 });
 
 app.use(express.static(PUBLIC_DIR));
@@ -77,6 +95,17 @@ const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => 
 const bad = (msg) => Object.assign(new Error(msg), { status: 400 });
 
 // ------------------------------------------------------------------ bootstrap / state
+function capabilities() {
+  return {
+    ffmpeg: ffmpegVersion,
+    claude: claudeAvailable(),
+    ai: claudeStatus(),
+    tts: ttsAvailable(),
+    voice: { provider: activeProvider(), kokoro: kokoroStatus() },
+    traffic: true, // keyless: DOT work-zone feeds, public dispatch feeds and local headlines
+  };
+}
+
 function bootstrap() {
   const d = store.data;
   return {
@@ -92,17 +121,55 @@ function bootstrap() {
     imaging: d.imaging,
     advertisers: d.advertisers,
     spots: d.spots,
+    processing: { ...d.processing, params: resolveParams(d.processing?.preset, d.processing?.overrides), presets: Object.fromEntries(Object.entries(PRESETS).map(([k, v]) => [k, { name: v.name, description: v.description }])) },
     libraryCount: d.library.length,
-    capabilities: { ffmpeg: ffmpegVersion, claude: claudeAvailable(), tts: ttsAvailable(), traffic: Boolean(d.settings.tomtomApiKey) },
+    explicitCount: d.library.filter((t) => t.explicit && !t.disabled).length,
+    marketZones: marketZones(d.station),
+    formats: formatList(),
+    kokoroVoices: KOKORO_VOICES,
+    capabilities: capabilities(),
   };
 }
-app.get('/api/bootstrap', (req, res) => res.json(bootstrap()));
+app.get('/api/bootstrap', wrap(async (req, res) => { await checkClaudeCode(); res.json(bootstrap()); }));
 app.get('/api/state', (req, res) => res.json(engine.state()));
+app.get('/api/timeline', (req, res) => res.json(engine.timeline()));
+app.get('/api/peaks/:id', (req, res) => {
+  const p = engine.peaksFor(req.params.id);
+  if (!p) return res.status(404).json({ error: 'no waveform yet' });
+  res.json(p);
+});
+
+// ------------------------------------------------------------------ setup wizard
+app.get('/api/setup/status', (req, res) => res.json(setupStatus()));
+app.post('/api/setup', wrap(async (req, res) => {
+  const { station = {}, formatId, locations = [], startOnAir = false, cleanOnly } = req.body;
+  if (!formatId) throw bad('pick a format');
+  if (cleanOnly !== undefined) store.settings.cleanOnly = Boolean(cleanOnly);
+  if (!String(station.name || '').trim()) throw bad('your station needs a name');
+  applyFormat(formatId, station);
+  for (const name of locations.filter(Boolean)) {
+    try {
+      const g = await geocode(name);
+      if (g) store.data.station.market.locations.push(g);
+    } catch (err) { console.warn('[setup] geocode', name, err.message); }
+  }
+  if (station.timezone && validZone(station.timezone)) { store.data.station.timezone = station.timezone; store.data.station.timezoneMode = 'manual'; }
+  applyMarketTimezone(store.data.station);
+  store.save();
+  bedFile(chosenBedId()).then(() => engine.running && engine.reloadBed()).catch(() => {}); // the format's bed, rendered ahead of time
+  for (const k of [...scheduler.logs.keys()]) if (!scheduler.logs.get(k).items.some((i) => i.status === 'playing')) scheduler.logs.delete(k);
+  const job = buildLibrary(formatId);
+  if (startOnAir) {
+    const go = () => { if (store.data.library.length >= 15 && !engine.running && ffmpegVersion) engine.start(); };
+    setupEvents.on('progress', go);
+  }
+  res.json({ ...bootstrap(), job });
+}));
 
 // ------------------------------------------------------------------ engine / live assist
 app.post('/api/engine/start', wrap(async (req, res) => {
   if (!ffmpegVersion) throw bad('ffmpeg is not installed — it is required for playout and streaming.');
-  if (!store.data.library.length && !claudeAvailable()) throw bad('The music library is empty. Add music from monochrome (Library tab) or configure Claude to discover music automatically.');
+  if (!store.data.library.length && !claudeAvailable()) throw bad('The music library is empty. Run the setup wizard or add music from monochrome (Library).');
   await engine.start();
   res.json(engine.state());
 }));
@@ -120,12 +187,18 @@ app.post('/api/log/insert', wrap(async (req, res) => {
   let partial;
   if (b.trackId) {
     let t = library.findTrack(b.trackId);
-    if (!t && b.track) t = await library.addTrack(b.track, b.category || 'N');
+    if (!t && b.track) t = await library.addTrack(b.track, b.category || 'N'); // swaps to the clean version if needed
     if (!t) throw bad('unknown track');
+    if (library.cleanOnly() && t.explicit) {
+      const clean = await findCleanVersion(t);
+      if (!clean) throw bad(`"${t.title}" only exists as an explicit version (clean versions only is on)`);
+      t = await library.addTrack(clean, t.category);
+    }
     partial = { type: 'music', category: t.category, trackId: t.id, title: t.title, artist: t.artist, artwork: t.artwork, duration: t.duration, why: 'inserted by operator' };
   } else if (b.imagingId) {
     const im = store.data.imaging.items.find((i) => i.id === b.imagingId);
     if (!im) throw bad('unknown imaging item');
+    if (im.type === 'bed') throw bad('beds play automatically under talk (or fire one as a cart)');
     partial = { type: im.type, imagingId: im.id, title: im.name, artist: 'Imaging' };
   } else if (b.script) {
     partial = { type: 'say', script: String(b.script), title: 'Live Read', persona: b.persona || personaFor(Date.now())?.name };
@@ -133,17 +206,28 @@ app.post('/api/log/insert', wrap(async (req, res) => {
     partial = { type: b.type, mode: b.mode || 'auto', title: { dj: 'DJ Break', weather: 'Weather', traffic: 'Traffic', news: 'Newscast' }[b.type] };
   } else throw bad('nothing to insert');
   const it = scheduler.insertNext(partial);
-  if (!it) throw bad('no active log — start the station or build the log first');
-  broadcast('log', scheduler.snapshot());
+  if (!it) throw bad('no active log — go on air or build the log first');
   res.json(it);
 }));
-app.post('/api/log/:id/remove', (req, res) => { scheduler.remove(req.params.id); broadcast('log', scheduler.snapshot()); res.json({ ok: true }); });
-app.post('/api/log/:id/move', (req, res) => { scheduler.move(req.params.id, Number(req.body.dir)); broadcast('log', scheduler.snapshot()); res.json({ ok: true }); });
+app.post('/api/log/:id/remove', (req, res) => { scheduler.remove(req.params.id); res.json({ ok: true }); });
+app.post('/api/log/:id/move', (req, res) => { scheduler.move(req.params.id, Number(req.body.dir)); res.json({ ok: true }); });
+app.post('/api/log/:id/moveTo', (req, res) => { scheduler.moveTo(req.params.id, req.body.beforeId); res.json({ ok: true }); });
 app.post('/api/carts/:id/fire', wrap(async (req, res) => {
   if (!engine.running) throw bad('station is off air');
   await engine.fireCart(req.params.id);
   res.json({ ok: true });
 }));
+
+// ------------------------------------------------------------------ processing (engineering)
+app.get('/api/processing', (req, res) => res.json(bootstrap().processing));
+app.put('/api/processing', (req, res) => {
+  const { preset, overrides, bypass } = req.body;
+  const cur = store.data.processing || {};
+  const next = { preset: preset || cur.preset || 'streaming', overrides: overrides ?? (preset && preset !== cur.preset ? {} : cur.overrides || {}) };
+  if (bypass !== undefined) next.overrides = { ...next.overrides, bypass: Boolean(bypass) };
+  engine.setProcessing(next);
+  res.json(bootstrap().processing);
+});
 
 // ------------------------------------------------------------------ monochrome + library
 app.get('/api/monochrome/search', wrap(async (req, res) => res.json(await mono.search(req.query.q))));
@@ -160,26 +244,64 @@ app.get('/api/library', (req, res) => {
   if (q) items = items.filter((t) => `${t.artist} ${t.title} ${t.album}`.toLowerCase().includes(q));
   res.json(items.slice().sort((a, b) => a.artist.localeCompare(b.artist) || a.title.localeCompare(b.title)));
 });
+async function addMany(tracks, category) {
+  const added = []; const skipped = [];
+  for (const t of tracks.filter(Boolean)) {
+    try {
+      const e = await library.addTrack(t, category || 'N');
+      if (!added.includes(e)) added.push(e);
+    } catch (err) {
+      if (err.code !== 'EXPLICIT') throw err;
+      skipped.push({ title: t.title, artist: t.artist, reason: 'explicit only' });
+    }
+  }
+  return { added, skipped, swapped: added.filter((e) => e.note === 'clean version').length };
+}
 app.post('/api/library', wrap(async (req, res) => {
   const tracks = Array.isArray(req.body.tracks) ? req.body.tracks : [req.body.track];
-  const out = [];
-  for (const t of tracks.filter(Boolean)) out.push(await library.addTrack(t, req.body.category || 'N'));
-  res.json(out);
+  res.json(await addMany(tracks, req.body.category));
 }));
 app.post('/api/library/import', wrap(async (req, res) => {
   const { kind, id, category, limit } = req.body;
   const src = kind === 'artist' ? (await mono.getArtist(id)).topTracks : (await mono.getRelease(id)).tracks;
-  const out = [];
-  for (const t of src.slice(0, Number(limit) || 10)) out.push(await library.addTrack(t, category || 'N'));
-  res.json(out);
+  res.json(await addMany(src.slice(0, Number(limit) || 10), category));
 }));
+let sweepStatus = null;
+function startCleanSweep() {
+  if (sweepStatus?.running) return sweepStatus;
+  sweepStatus = { running: true, checked: 0, replaced: 0, disabled: 0, done: 0 };
+  library.cleanSweep((p) => { sweepStatus = { ...p, running: true }; broadcast('cleanSweep', sweepStatus); })
+    .then((r) => { sweepStatus = { ...r, running: false }; broadcast('cleanSweep', sweepStatus); })
+    .catch((err) => { sweepStatus = { running: false, error: err.message }; broadcast('cleanSweep', sweepStatus); });
+  return sweepStatus;
+}
+app.post('/api/library/clean', (req, res) => res.json(startCleanSweep()));
+app.get('/api/library/clean', (req, res) => res.json(sweepStatus || { running: false }));
 app.post('/api/library/discover', wrap(async (req, res) => res.json(await discover(req.body || {}))));
+app.get('/api/library/:id/detail', (req, res) => {
+  const d = trackDetail(req.params.id);
+  if (!d) return res.status(404).json({ error: 'unknown track' });
+  res.json(d);
+});
+app.post('/api/library/:id/analyze', wrap(async (req, res) => res.json(await analyzeTrack(req.params.id))));
+app.put('/api/library/:id/markers', (req, res) => {
+  const m = {};
+  for (const k of ['intro', 'outro', 'mixOut']) if (req.body[k] !== undefined && req.body[k] !== null && req.body[k] !== '') m[k] = Number(req.body[k]);
+  if (['cold', 'fade'].includes(req.body.endType)) m.endType = req.body.endType;
+  if (req.body.instrumental) m.instrumental = true;
+  res.json(library.updateTrack(req.params.id, { markers: m }));
+});
 app.patch('/api/library/:id', (req, res) => res.json(library.updateTrack(req.params.id, req.body)));
 app.delete('/api/library/:id', (req, res) => { library.removeTrack(req.params.id); res.json({ ok: true }); });
 
 // ------------------------------------------------------------------ configuration
 const sections = {
-  station: (v) => { Object.assign(store.data.station, v, { market: { ...store.data.station.market, ...(v.market || {}) } }); },
+  station: (v) => {
+    const st = store.data.station;
+    if (v.timezone && !validZone(v.timezone)) throw bad(`unknown time zone "${v.timezone}"`);
+    Object.assign(st, v, { market: { ...st.market, ...(v.market || {}) }, socials: { ...st.socials, ...(v.socials || {}) } });
+    if (st.timezoneMode === 'auto') applyMarketTimezone(st);
+  },
   stream: (v) => {
     const ic = { ...store.data.stream.icecast, ...(v.icecast || {}) };
     if (v.icecast?.password === '••••') ic.password = store.data.stream.icecast.password;
@@ -196,36 +318,83 @@ const sections = {
   advertisers: (v) => { store.data.advertisers = v; },
   spots: (v) => { store.data.spots = v; },
 };
-app.put('/api/settings', (req, res) => { store.updateSettings(req.body); res.json(bootstrap()); });
+app.put('/api/settings', wrap(async (req, res) => {
+  const wasClean = library.cleanOnly();
+  if (req.body.autoBed) req.body.autoBed = { ...store.settings.autoBed, ...req.body.autoBed };
+  if (req.body.autoImaging) req.body.autoImaging = { ...store.settings.autoImaging, ...req.body.autoImaging, lastRun: store.settings.autoImaging?.lastRun || 0 };
+  store.updateSettings(req.body);
+  if (!wasClean && library.cleanOnly()) startCleanSweep(); // swap explicit songs for radio edits
+  if (req.body.autoBed && engine.running) engine.reloadBed();
+  await checkClaudeCode(true);
+  res.json(bootstrap());
+}));
 app.put('/api/:section', (req, res) => {
   const fn = sections[req.params.section];
   if (!fn) return res.status(404).json({ error: 'unknown section' });
-  // assign ids to new list entries
   if (Array.isArray(req.body)) for (const x of req.body) if (x && typeof x === 'object' && !x.id && req.params.section !== 'grid') x.id = uid();
   if (req.params.section === 'imaging') for (const x of req.body.items || []) if (!x.id) x.id = uid('img_');
   fn(req.body);
   store.save();
+  if (['imaging', 'station'].includes(req.params.section) && engine.running) engine.reloadBed(); // uploaded beds / format may change the bed
   res.json(bootstrap());
 });
+
+// ------------------------------------------------------------------ auto-sweeper creator
+app.get('/api/imaging/create', (req, res) => res.json(imagingJobStatus()));
+app.post('/api/imaging/create', wrap(async (req, res) => {
+  const count = Math.max(1, Math.min(20, Number(req.body.count) || 6));
+  if (imagingJobStatus().running) throw Object.assign(new Error('already writing imaging'), { status: 409 });
+  createImaging({ count, guidance: String(req.body.guidance || '').slice(0, 600) });
+  res.json(imagingJobStatus());
+}));
+imagingEvents.on('progress', (p) => { broadcast('imagingJob', p); if (p.done) broadcast('bootstrap', bootstrap()); });
+
+// ------------------------------------------------------------------ auto-bed
+app.get('/api/beds', (req, res) => res.json({ beds: bedList(), chosen: chosenBedId(), settings: store.settings.autoBed, styles: BED_STYLES }));
+app.post('/api/beds/preview', wrap(async (req, res) => {
+  const id = String(req.body.id || chosenBedId());
+  res.json({ id, audio: await bedUrl(id) });
+}));
 
 app.post('/api/market/locations', wrap(async (req, res) => {
   const name = String(req.body.name || '').trim();
   if (!name) throw bad('location name required');
   const g = await geocode(name);
   if (!g) throw bad(`could not find "${name}"`);
-  // the first location sets the station clock, so "it's 7:20" is local time for the market
-  if (!store.data.station.market.locations.length && g.timezone) store.data.station.timezone = g.timezone;
   store.data.station.market.locations.push(g);
+  applyMarketTimezone(store.data.station); // the station clock follows the primary market location
   store.save();
   res.json(bootstrap());
 }));
 app.delete('/api/market/locations/:idx', (req, res) => {
   store.data.station.market.locations.splice(Number(req.params.idx), 1);
+  applyMarketTimezone(store.data.station);
+  store.save();
+  res.json(bootstrap());
+});
+app.post('/api/market/primary', (req, res) => {
+  const locs = store.data.station.market.locations;
+  const i = Number(req.body.idx);
+  if (locs[i]) locs.unshift(...locs.splice(i, 1));
+  applyMarketTimezone(store.data.station);
   store.save();
   res.json(bootstrap());
 });
 
-// ------------------------------------------------------------------ feeds & AI tools
+// ------------------------------------------------------------------ AI & voice
+app.get('/api/ai/status', wrap(async (req, res) => { await checkClaudeCode(true); res.json(claudeStatus()); }));
+app.post('/api/ai/test', wrap(async (req, res) => {
+  const t0 = Date.now();
+  const text = await claudeText({ system: 'You are a radio DJ. Reply with one short, natural sentence.', prompt: `Say hi to the listeners of ${store.station.name}.`, maxTokens: 200, effort: 'low' });
+  res.json({ text, ms: Date.now() - t0, status: claudeStatus() });
+}));
+app.get('/api/voice/status', (req, res) => res.json({ provider: activeProvider(), available: ttsAvailable(), kokoro: kokoroStatus() }));
+app.post('/api/voice/kokoro/install', wrap(async (req, res) => {
+  installKokoro().then(() => broadcast('voiceInstall', { done: true, status: kokoroStatus() })).catch((err) => broadcast('voiceInstall', { done: true, error: err.message }));
+  res.json({ started: true });
+}));
+installEvents.on('progress', (line) => broadcast('voiceInstall', { line }));
+
 app.get('/api/feeds/weather', wrap(async (req, res) => res.json(await marketWeather())));
 app.get('/api/feeds/news', wrap(async (req, res) => res.json(await getNews())));
 app.get('/api/feeds/traffic', wrap(async (req, res) => res.json(await getTraffic())));
@@ -236,13 +405,22 @@ app.post('/api/dj/preview', wrap(async (req, res) => {
   const lib = store.data.library;
   const previous = hist.length ? hist : lib.slice(0, 1);
   const next = lib.length ? lib[Math.floor(Math.random() * lib.length)] : null;
-  const out = await writeBreak({ kind, previous, next, at: Date.now() });
+  const talkWindow = next?.lyrics?.status === 'found' ? next.lyrics.vocalStart : null;
+  const out = await writeBreak({ kind, previous, next, at: Date.now(), talkWindow });
   let audio = null;
-  if (ttsAvailable() && req.body.voice !== false) audio = '/tts/' + path.basename(await synthesize(out.text, out.persona?.voice || {}));
+  if (ttsAvailable() && req.body.voice !== false) {
+    const type = ['weather', 'traffic', 'news'].includes(kind) ? kind : 'dj';
+    const el = await produceElement({ type, script: out.text, persona: out.persona?.name });
+    audio = '/tts/' + path.basename(el.file);
+  }
   res.json({ text: out.text, persona: out.persona?.name, audio });
 }));
 app.post('/api/tts/preview', wrap(async (req, res) => {
-  const { text, voice, imaging } = req.body;
+  const { text, voice, imaging, imagingId } = req.body;
+  if (imagingId) {
+    const el = await produceElement({ type: store.data.imaging.items.find((i) => i.id === imagingId)?.type, imagingId });
+    return res.json({ audio: el.file.startsWith(UPLOAD_DIR) ? `/uploads/${path.basename(el.file)}` : `/tts/${path.basename(el.file)}`, markers: el.markers });
+  }
   const spoken = imaging ? renderImagingText(text) : text;
   const file = await synthesize(spoken, voice || store.data.imaging.voice);
   const a = await loadAudio(file, { normalize: false });
@@ -273,6 +451,16 @@ app.post('/api/upload', express.raw({ type: '*/*', limit: '60mb' }), wrap(async 
     throw bad('Not a playable audio file.');
   }
 }));
+app.post('/api/station/logo', express.raw({ type: 'image/*', limit: '8mb' }), wrap(async (req, res) => {
+  const type = String(req.headers['content-type'] || '');
+  const ext = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/svg+xml': '.svg', 'image/gif': '.gif' }[type];
+  if (!ext || !req.body?.length) throw bad('upload a PNG, JPEG, WebP, GIF or SVG image');
+  const file = `logo_${Date.now()}${ext}`;
+  fs.writeFileSync(path.join(UPLOAD_DIR, file), req.body);
+  store.data.station.logo = file;
+  store.save();
+  res.json(bootstrap());
+}));
 
 // ------------------------------------------------------------------ reports
 app.get('/api/history', (req, res) => {
@@ -294,31 +482,59 @@ const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   if (!req.url.startsWith('/ws') || !checkAuth(req)) return socket.destroy();
   wss.handleUpgrade(req, socket, head, (ws) => {
+    ws.topics = new Set();
+    ws.on('message', (raw) => {
+      let m;
+      try { m = JSON.parse(raw); } catch { return; }
+      if (m.type === 'sub') ws.topics = new Set(m.topics || []);
+      if (m.type === 'peaks') {
+        const p = engine.peaksFor(m.id);
+        if (p) ws.send(JSON.stringify({ type: 'peaks', data: p }));
+      }
+    });
     ws.send(JSON.stringify({ type: 'state', data: engine.state() }));
     ws.send(JSON.stringify({ type: 'log', data: scheduler.snapshot() }));
+    ws.send(JSON.stringify({ type: 'timeline', data: engine.timeline() }));
   });
 });
-function broadcast(type, data) {
+function broadcast(type, data, topic) {
   const msg = JSON.stringify({ type, data });
-  for (const c of wss.clients) if (c.readyState === 1) c.send(msg);
+  for (const c of wss.clients) if (c.readyState === 1 && (!topic || c.topics?.has(topic))) c.send(msg);
 }
 let logTimer = null;
 const logChanged = () => {
   clearTimeout(logTimer);
-  logTimer = setTimeout(() => broadcast('log', scheduler.snapshot()), 200);
+  logTimer = setTimeout(() => broadcast('log', scheduler.snapshot()), 150);
 };
-scheduler.onChange = logChanged;
+scheduler.onChange = () => { engine.onLogChange(); logChanged(); };
 engine.on('log', logChanged);
 engine.on('state', (s) => broadcast('state', s));
+engine.on('timeline', (t) => broadcast('timeline', t));
+engine.on('meters', (m) => broadcast('meters', m, 'meters'));
 engine.on('nowPlaying', (i) => { broadcast('nowPlaying', i); logChanged(); });
-setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', engine.level); }, 100);
+setupEvents.on('progress', (p) => broadcast('setup', p));
+setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', engine.level); }, 80);
+
+// locations saved before zones (and states, for traffic feeds) were tracked get them now (offline lookup)
+{
+  let changed = false;
+  for (const l of store.data.station.market.locations) {
+    if (!l.timezone && Number.isFinite(l.lat)) { l.timezone = timezoneFor(l.lat, l.lon); changed ||= Boolean(l.timezone); }
+    if (!l.state && /, (US|PR)$/.test(l.name || '')) { l.state = l.name.split(',').map((x) => x.trim())[1] || ''; changed = true; }
+  }
+  if (changed) { applyMarketTimezone(store.data.station); store.save(); }
+}
+
+if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
+const imagingCheck = startAutoImaging();
+setupEvents.on('progress', (p) => { if (p.done) setTimeout(imagingCheck, 5000); }); // a new station's first fresh imaging, once its library is in
 
 server.listen(PORT, HOST, () => {
-  console.log(`\n  Valhalla Radio studio  →  http://localhost:${PORT}`);
-  console.log(`  Public stream          →  http://localhost:${PORT}/stream.mp3`);
-  console.log(`  Listener page          →  http://localhost:${PORT}/listen`);
-  console.log(`  ffmpeg: ${ffmpegVersion || 'NOT FOUND (required)'} | Claude: ${claudeAvailable() ? 'configured' : 'not configured'} | TTS: ${ttsAvailable() ? store.settings.ttsProvider : 'not configured'}\n`);
-  if (process.env.AUTOSTART === '1' && ffmpegVersion) engine.start();
+  console.log(`\n  Valhalla studio   →  http://localhost:${PORT}`);
+  console.log(`  Station stream    →  http://localhost:${PORT}/stream.mp3`);
+  console.log(`  Listener page     →  http://localhost:${PORT}/listen`);
+  console.log(`  ffmpeg: ${ffmpegVersion ? 'ok' : 'NOT FOUND (required)'} | voice: ${activeProvider()} | station: ${store.station.setupComplete ? store.station.name : 'not set up yet (open the studio)'}\n`);
+  if (process.env.AUTOSTART === '1' && ffmpegVersion && store.data.library.length) engine.start();
 });
 
 for (const sig of ['SIGINT', 'SIGTERM']) {

@@ -1,25 +1,39 @@
-// Real-time playout engine. Renders the program log to PCM in real time:
-// crossfades, DJ talk-ups over song intros, ducking under voice/imaging, tight
-// commercial segues, loudness levelling and a final limiter, then hands the PCM
-// to the streamer (MP3 encoder → listeners / Icecast).
+// Real-time playout engine.
+//
+// A frame-accurate master timeline: the planner decides when each element starts and how every
+// source's level moves (fade + duck automation lanes), songs stream through StreamDecoders,
+// short elements play from memory, the master bus runs through the broadcast processor, and the
+// result is handed to the streamer.
 
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import fs from 'node:fs';
-import { SAMPLE_RATE, UPLOAD_DIR } from '../config.js';
+import { SAMPLE_RATE as SR, CACHE_DIR } from '../config.js';
 import { store } from '../store.js';
 import * as mono from '../sources/monochrome.js';
 import * as library from '../scheduler/library.js';
 import { KIND, estDuration } from '../scheduler/logs.js';
 import { loadAudio } from './audio.js';
-import { mixSource, limitToInt16, approach, dbToGain, overlapSec } from './mixer.js';
-import { writeBreak, personaFor, renderImagingText } from '../ai/dj.js';
-import { synthesize, ttsAvailable } from '../voice/tts.js';
-import { zoned } from '../util/time.js';
+import { StreamDecoder, PEAK_SECONDS } from '../audio/stream.js';
+import { analyze } from '../audio/analysisPool.js';
+import { peaks as computePeaks } from '../audio/analysis.js';
+import { lookupVocalTiming } from '../audio/lyrics.js';
+import { planTransition } from './planner.js';
+import { BufferSource, StreamSource, LoopSource } from './sources.js';
+import { BroadcastProcessor, resolveParams } from '../audio/processor.js';
+import { writeBreak } from '../ai/dj.js';
+import { produceElement } from '../audio/production.js';
+import { chosenBedId, loadBed } from '../audio/beds.js';
 
-const BLOCK = 1024;
-const PREBUFFER_FRAMES = Math.floor(SAMPLE_RATE * 0.25);
+const BLOCK = 256;
+const PREBUFFER = Math.floor(SR * 0.5);
+const ANALYSIS_VERSION = 2;
+const HEAD_SEC = 48;
+const PEAKS_DIR = path.join(CACHE_DIR, 'peaks');
+fs.mkdirSync(PEAKS_DIR, { recursive: true });
 const log = (...a) => console.log('[playout]', ...a);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const dbToLin = (db) => Math.pow(10, db / 20);
 
 export class Playout extends EventEmitter {
   constructor(scheduler, streamer) {
@@ -27,42 +41,66 @@ export class Playout extends EventEmitter {
     this.scheduler = scheduler;
     this.streamer = streamer;
     this.running = false;
-    this.sources = []; // active sources being mixed
-    this.main = null; // the source that owns the timeline
-    this.prepared = new Map(); // itemId -> audio
+    this.frame = 0;
+    this.sources = [];
+    this.anchor = null;
+    this.cue = null;
     this.preparing = new Set();
-    this.duck = 1;
-    this.limiter = {};
-    this.deadAirFrames = 0;
-    this.emergency = null;
-    this.forceNext = false;
-    this.level = { l: 0, r: 0 };
+    this.overlayDuck = 1;
+    this.deadAir = 0;
     this.lastError = null;
+    this.level = { l: 0, r: 0 };
+    this.processor = new BroadcastProcessor(SR, this.processingParams());
+    this.bed = null; // the auto-bed source while it's up (or fading)
+    this.bedAudio = null; // decoded loop, ready to go
   }
+
+  processingParams() {
+    const p = store.data.processing || {};
+    return resolveParams(p.preset || 'streaming', p.overrides || {});
+  }
+
+  setProcessing(cfg) {
+    store.data.processing = { ...(store.data.processing || {}), ...cfg };
+    store.save();
+    this.processor.setParams(this.processingParams());
+  }
+
+  // ------------------------------------------------------------------ lifecycle
 
   async start() {
     if (this.running) return;
     this.running = true;
     this.streamer.start();
     this.t0 = performance.now();
+    this.frame = 0;
     this.written = 0;
+    this.startWall = Date.now();
     this.timer = setInterval(() => this.tick(), 20);
-    this.prepTimer = setInterval(() => this.prepLoop(), 1000);
+    this.prepTimer = setInterval(() => this.prepLoop(), 700);
     this.ensureTimer = setInterval(() => this.scheduler.ensure().catch((e) => this.fail(e)), 30_000);
     this.stateTimer = setInterval(() => this.emit('state', this.state()), 1000);
-    this.scheduler.ensure().catch((e) => this.fail(e));
-    this.loadEmergency();
+    this.meterTimer = setInterval(() => this.emit('meters', this.processor.meters()), 50);
+    this.timelineTimer = setInterval(() => this.emit('timeline', this.timeline()), 500);
+    this.scheduler.ensure().then(() => this.prepLoop()).catch((e) => this.fail(e));
+    this.reloadBed();
     log('engine started');
     this.emit('state', this.state());
   }
 
   stop() {
     this.running = false;
-    for (const t of [this.timer, this.prepTimer, this.ensureTimer, this.stateTimer]) clearInterval(t);
-    // the interrupted item airs again from the top next time (its audio was released when it started)
-    for (const s of this.sources) if (s.item.status === 'playing' && !s.overlay) s.item.status = 'scheduled';
+    for (const t of [this.timer, this.prepTimer, this.ensureTimer, this.stateTimer, this.meterTimer, this.timelineTimer]) clearInterval(t);
+    for (const s of this.sources) {
+      // an interrupted item airs again from the top next time
+      if (s.item.status === 'playing' && !s.overlay) s.item.status = 'scheduled';
+      s.release();
+    }
+    if (this.cue) { this.cue.item.status = 'ready'; this.cue = null; }
+    for (const it of this.scheduler.allItems()) this.releasePrep(it);
     this.sources = [];
-    this.main = null;
+    this.anchor = null;
+    this.bed = null;
     this.streamer.stop();
     log('engine stopped');
     this.emit('state', this.state());
@@ -70,20 +108,34 @@ export class Playout extends EventEmitter {
 
   fail(err) {
     this.lastError = `${new Date().toLocaleTimeString()}: ${err.message || err}`;
-    console.error('[playout]', err);
+    console.error('[playout]', err.message || err);
   }
 
-  // ---------------------------------------------------------------- real-time loop
+  nowSec() { return this.frame / SR; }
+
+  // ------------------------------------------------------------------ real-time loop
 
   tick() {
-    const expected = Math.floor(((performance.now() - this.t0) / 1000) * SAMPLE_RATE) + PREBUFFER_FRAMES;
+    const expected = Math.floor(((performance.now() - this.t0) / 1000) * SR) + PREBUFFER;
     let due = expected - this.written;
     if (due <= 0) return;
-    if (due > SAMPLE_RATE) { // event loop stalled; don't burst-render seconds of audio
-      this.written = expected - Math.floor(SAMPLE_RATE * 0.1);
-      due = Math.floor(SAMPLE_RATE * 0.1);
+    if (due > SR) { // the event loop stalled; skip ahead rather than burst-render
+      this.written = expected - Math.floor(SR * 0.1);
+      due = Math.floor(SR * 0.1);
     }
-    const out = this.render(due);
+    this.maybePlan();
+    const buf = this.render(due);
+    this.processor.process(buf, due);
+    const out = new Int16Array(due * 2);
+    let pl = 0; let pr = 0;
+    for (let i = 0; i < out.length; i += 2) {
+      const l = buf[i]; const r = buf[i + 1];
+      out[i] = l * 32767; out[i + 1] = r * 32767;
+      const al = l < 0 ? -l : l; const ar = r < 0 ? -r : r;
+      if (al > pl) pl = al;
+      if (ar > pr) pr = ar;
+    }
+    this.level = { l: Math.max(pl, this.level.l * 0.8), r: Math.max(pr, this.level.r * 0.8) };
     this.streamer.write(out);
     this.written += due;
   }
@@ -92,149 +144,343 @@ export class Playout extends EventEmitter {
     const buf = new Float32Array(frames * 2);
     for (let off = 0; off < frames; off += BLOCK) {
       const n = Math.min(BLOCK, frames - off);
-      this.sequence();
-      const voiceOn = this.sources.some((s) => s.kind === 'voice' && s.pos < s.endFrame);
-      const imagingOn = this.sources.some((s) => (s.kind === 'imaging' || s.overlay) && s.pos < s.endFrame);
-      const target = voiceOn ? dbToGain(store.settings.duckDb ?? -11) : imagingOn ? dbToGain(-5) : 1;
-      const d0 = this.duck;
-      const dt = n / SAMPLE_RATE;
-      this.duck = approach(this.duck, target, this.duck > target ? 4 : 1.2, dt);
+      const F = this.frame;
+      if (this.cue && !this.cue.committed && F + n > this.cue.commitFrame) this.commitCue();
+      if (this.cue && this.cue.startFrame < F + n) this.startCued(Math.max(this.cue.startFrame, F));
+
+      const overlayOn = this.sources.some((s) => s.overlay && !s.done);
+      const od0 = this.overlayDuck;
+      this.overlayDuck += ((overlayOn ? 0.5 : 1) - this.overlayDuck) * Math.min(1, n / (SR * 0.08));
+      this.updateBed(F);
       for (const s of this.sources) {
-        const ducked = s.kind === 'music';
-        mixSource(buf, off, s, n, ducked ? d0 : 1, ducked ? this.duck : 1);
+        if (s.done) continue;
+        const o = Math.max(0, s.start - F);
+        if (o >= n) continue;
+        const m = s.kind === 'music' && !s.overlay;
+        const g0 = s.gainAt(F + o) * (m ? od0 : 1);
+        const g1 = s.gainAt(F + n) * (m ? this.overlayDuck : 1);
+        const last = s.fade.pts[s.fade.pts.length - 1];
+        if (g0 === 0 && g1 === 0 && last.v === 0 && last.f <= F) { s.done = true; continue; } // faded out for good
+        s.mix(buf, off + o, n - o, g0, g1);
+      }
+      if (this.bed) {
+        const b = this.bed;
+        const g0 = b.gainAt(F); const g1 = b.gainAt(F + n);
+        const last = b.fade.pts[b.fade.pts.length - 1];
+        if (!b.on && g0 === 0 && g1 === 0 && last.f <= F) { b.release(); this.bed = null; } else b.mix(buf, off, n, g0, g1);
       }
       this.reap();
-      if (!this.sources.length) this.deadAirFrames += n; else this.deadAirFrames = 0;
+      this.frame += n;
+      const audible = this.sources.some((s) => !s.done && !s.overlay);
+      this.deadAir = audible || this.cue ? 0 : this.deadAir + n;
+      if (this.deadAir > SR * 3 && this.frame > SR * 25) this.emergency(); // grace period while the first items prepare
     }
-    let pl = 0; let pr = 0;
-    for (let i = 0; i < buf.length; i += 2) { pl = Math.max(pl, Math.abs(buf[i])); pr = Math.max(pr, Math.abs(buf[i + 1])); }
-    this.level = { l: Math.max(pl, this.level.l * 0.85), r: Math.max(pr, this.level.r * 0.85) };
-    return limitToInt16(buf, this.limiter);
-  }
-
-  /** Decide whether the next log item should start now. */
-  sequence() {
-    const main = this.main;
-    const remaining = main ? Math.max(0, main.endFrame - main.pos) : 0;
-    if (main && !this.forceNext && remaining > SAMPLE_RATE * 12) return;
-
-    const r = this.scheduler.next(Date.now(), { urgent: !main || remaining < SAMPLE_RATE * 0.5 });
-    const item = r.item;
-    if (item && item.status === 'ready' && !this.prepared.has(item.id)) item.status = 'scheduled'; // audio was released; prepare again
-    if (item && item.status === 'ready' && this.prepared.has(item.id)) {
-      const audio = this.prepared.get(item.id);
-      const kind = KIND[item.type];
-      const ov = main && !this.forceNext
-        ? overlapSec(main.kind, kind, {
-          crossfadeSec: store.settings.crossfadeSec ?? 3,
-          talkOverSec: store.settings.talkOverSec ?? 6,
-          curDurSec: (main.endFrame - main.startFrame) / SAMPLE_RATE,
-          nextDurSec: audio.durationSec,
-        })
-        : 0;
-      if (main && !this.forceNext && remaining > ov * SAMPLE_RATE) return;
-      this.startItem(item, audio);
-      return;
-    }
-    // Nothing ready. If the timeline is empty for too long, play emergency audio.
-    if ((!main || remaining === 0) && this.deadAirFrames > SAMPLE_RATE * 3 && this.emergency) {
-      log('dead air — playing emergency audio');
-      const em = this.emergency;
-      this.emergency = null;
-      this.startItem(em.item, em.audio);
-      this.loadEmergency();
-    }
-  }
-
-  startItem(item, audio) {
-    const kind = KIND[item.type] || 'music';
-    const prev = this.main;
-    if (prev && prev.pos < prev.endFrame) {
-      const left = prev.endFrame - prev.pos;
-      if (this.forceNext) {
-        const f = Math.min(left, Math.floor(SAMPLE_RATE * 0.8));
-        prev.fadeOut = { at: prev.pos, frames: f };
-        prev.endFrame = prev.pos + f;
-      } else if (prev.kind === 'music' && left > 0) {
-        prev.fadeOut = { at: prev.pos, frames: left };
-      }
-    }
-    this.forceNext = false;
-    const src = {
-      item, kind, pcm: audio.pcm, pos: audio.startFrame, startFrame: audio.startFrame, endFrame: audio.endFrame, gain: audio.gain,
-      fadeIn: kind === 'music' && prev?.kind === 'music' ? { at: audio.startFrame, frames: Math.floor(SAMPLE_RATE * 0.25) } : null,
-    };
-    this.sources.push(src);
-    this.main = src;
-    item.status = 'playing';
-    item.airedAt = Date.now();
-    item.audioDuration = audio.durationSec;
-    this.prepared.delete(item.id);
-    this.onAir(item);
+    return buf;
   }
 
   reap() {
     for (const s of [...this.sources]) {
-      if (s.pos < s.endFrame) continue;
+      if (!s.done) continue;
       this.sources.splice(this.sources.indexOf(s), 1);
       if (s.item.status === 'playing') s.item.status = 'played';
-      if (this.main === s) this.main = null;
+      s.release();
+      if (this.anchor === s) this.anchor = this.sources.filter((x) => !x.overlay).at(-1) || null;
       if (!s.overlay) this.emit('state', this.state());
     }
   }
 
+  // ------------------------------------------------------------------ auto-bed
+
+  /** Load (or switch to) the bed auto-bed should use. Safe to call any time. */
+  async reloadBed() {
+    const id = chosenBedId();
+    if (this.bedAudio?.id === id) return;
+    try {
+      this.bedAudio = await loadBed(id);
+      log(`auto-bed ready: ${this.bedAudio.name} (${this.bedAudio.seconds.toFixed(1)}s loop)`);
+    } catch (err) {
+      this.fail(new Error(`auto-bed: ${err.message}`));
+    }
+  }
+
+  /** Does this element want a bed under it when there's no music to talk over? */
+  bedWanted(item) {
+    if (item.bed === false) return false;
+    if (item.type === 'dj' || item.type === 'say') return true;
+    return ['news', 'weather', 'traffic'].includes(item.type) && store.settings.production?.infoBeds === false;
+  }
+
+  /**
+   * Auto-bed: bring a music bed up under talk that would otherwise be dry, and take it out when a
+   * song (or a spot / imaging element) takes over. Runs once per render block.
+   */
+  updateBed(F) {
+    const cfg = store.settings.autoBed || {};
+    const live = this.sources.filter((s) => !s.done && !s.overlay);
+    const voice = live.find((s) => s.kind === 'voice' && s.start <= F && this.bedWanted(s.item));
+    const covering = (s) => s.kind === 'music' && s.start <= F && s.fade.value(F) * s.duck.value(F) > 0.08;
+    const musicNow = live.some(covering);
+    const blocking = live.some((s) => (s.kind === 'spot' || s.kind === 'imaging') && s.start <= F);
+    let want = false;
+    if (cfg.enabled !== false && this.bedAudio && voice && !musicNow && !blocking) {
+      const vEnd = voice.start + Math.round(((voice.markers?.voiceEnd ?? voice.len) + 0.25) * SR);
+      if (F < vEnd) {
+        if (this.bed?.on) want = true; // already up: hold it while the talk stays dry
+        else {
+          // only bring a bed in for a real stretch of dry talk, not a one-second gap before the song
+          let coverAt = vEnd;
+          for (const s of live) if (s.kind === 'music' && s.start > F) coverAt = Math.min(coverAt, s.start);
+          if (this.cue?.item.type === 'music') coverAt = Math.min(coverAt, this.cue.startFrame);
+          want = coverAt - F > 2.5 * SR;
+        }
+      }
+    }
+    const b = this.bed;
+    if (want) {
+      if (b?.on) { b.offAt = 0; return; }
+      const level = dbToLin(cfg.levelDb ?? -12);
+      if (b) { // still fading out: bring it back up from where it is
+        b.on = true; b.offAt = 0;
+        b.fade.ramp(F, F + Math.round(SR * 0.5), 1, 'cos');
+        return;
+      }
+      this.bed = new LoopSource({ item: { id: 'bed', type: 'bed', title: this.bedAudio.name }, kind: 'bed', start: F, audio: this.bedAudio, base: this.bedAudio.gain * level });
+      this.bed.on = true;
+      this.bed.fade.ramp(F, F + Math.round(SR * 0.6), 1, 'cos');
+      return;
+    }
+    if (!b?.on) return;
+    if (musicNow || blocking) { // the song (or spot) takes over: get out of the way
+      b.on = false;
+      b.fade.ramp(F, F + Math.round(SR * (musicNow ? 1.5 : 0.5)), 0, 'db');
+      return;
+    }
+    // talk ended: hold briefly in case another voice element follows (weather into traffic), then tail out
+    if (!b.offAt) b.offAt = F + Math.round(SR * 1.0);
+    if (F >= b.offAt) {
+      b.on = false;
+      b.fade.ramp(F, F + Math.round(SR * 1.4), 0, 'db');
+    }
+  }
+
+  // ------------------------------------------------------------------ planning
+
+  remainingOf(src) {
+    return (src.start - this.frame) / SR + src.len;
+  }
+
+  maybePlan() {
+    if (this.cue || !this.running) return;
+    const a = this.anchor && !this.anchor.done ? this.anchor : null;
+    let remaining = 0;
+    if (a) {
+      remaining = this.remainingOf(a);
+      const tailKnown = a.kind !== 'music' || a.markers.endType;
+      if (!tailKnown && remaining > 25) return; // wait for the tail analysis
+      if (remaining > 75) return;
+    }
+    const r = this.scheduler.next(Date.now() + remaining * 1000, { urgent: !a || remaining < 2.5 });
+    const item = r.item;
+    if (!item || item.status !== 'ready' || !item.prep) return;
+    this.planNext(item, { immediate: false });
+  }
+
+  planNext(item, { immediate }) {
+    const nowSec = this.nowSec();
+    const a = this.anchor && !this.anchor.done ? this.anchor : null;
+    const others = this.sources.filter((s) => s !== a && !s.done && !s.overlay && s.kind === 'music').map((s) => ({ id: s.item.id, kind: 'music' }));
+    const s = store.settings;
+    const plan = planTransition({
+      now: nowSec,
+      prev: a ? this.describeSource(a) : null,
+      next: this.describeNext(item),
+      others,
+      opts: { immediate, duckDb: s.duckDb ?? -12, postGap: s.postGap ?? 0.5, beatMatch: s.beatMatch !== false, talkOverOutroMax: s.talkOverOutroMax ?? 6 },
+    });
+    const startFrame = Math.round(plan.start * SR);
+    let commitFrame = startFrame;
+    for (const r of plan.ramps) if (r.target !== 'next') commitFrame = Math.min(commitFrame, Math.round(r.at * SR));
+    this.cue = { item, plan, startFrame, commitFrame: Math.max(this.frame, commitFrame - Math.round(SR * 0.05)), committed: false };
+    item.status = 'cued';
+    item.transition = { type: plan.type, notes: plan.notes, at: this.startWall + plan.start * 1000 };
+    if (immediate) this.commitCue();
+    this.emit('log');
+    this.emit('timeline', this.timeline());
+  }
+
+  commitCue() {
+    const c = this.cue;
+    c.committed = true;
+    for (const r of c.plan.ramps) {
+      if (r.target === 'next') continue;
+      const src = r.target === 'prev' ? this.anchor : this.sources.find((s) => s.item.id === r.target);
+      if (!src) continue;
+      const f0 = Math.round(r.at * SR); const f1 = Math.round((r.at + r.dur) * SR);
+      (r.lane === 'duck' ? src.duck : src.fade).ramp(f0, f1, r.to, r.curve);
+    }
+  }
+
+  uncue() {
+    if (!this.cue || this.cue.committed) return;
+    if (this.cue.item.status === 'cued') this.cue.item.status = 'ready';
+    this.cue.item.transition = null;
+    this.cue = null;
+  }
+
+  /** Operator moved/removed/inserted items: re-plan if the cued item is no longer next. */
+  onLogChange() {
+    if (!this.cue || this.cue.committed) return;
+    const first = this.scheduler.pendingItems().find((i) => i.status !== 'playing');
+    if (first !== this.cue.item) this.uncue();
+  }
+
+  startCued(atFrame) {
+    const { item, plan } = this.cue;
+    this.cue = null;
+    const prep = item.prep;
+    if (!prep) { log('cued item lost its audio'); return; }
+    let src;
+    if (prep.kind === 'music') {
+      const m = prep.markers;
+      src = new StreamSource({
+        item, kind: 'music', start: atFrame, decoder: prep.decoder, base: prep.gain, markers: m,
+        trimStart: Math.round((m.startSec || 0) * SR), trimEnd: m.endSec ? Math.round(m.endSec * SR) : null, lenHint: m.duration || item.duration || 240,
+      });
+      prep.decoder = null; // ownership moves to the source
+    } else {
+      src = new BufferSource({ item, kind: prep.kind, start: atFrame, audio: prep.audio, base: prep.audio.gain, markers: prep.markers });
+    }
+    for (const r of plan.ramps) {
+      if (r.target !== 'next') continue;
+      (r.lane === 'duck' ? src.duck : src.fade).ramp(Math.round(r.at * SR), Math.round((r.at + r.dur) * SR), r.to, r.curve);
+    }
+    src.prep = prep;
+    this.sources.push(src);
+    this.anchor = src;
+    item.prep = null;
+    item.status = 'playing';
+    item.airedAt = this.startWall + (atFrame / SR) * 1000;
+    item.audioDuration = src.len;
+    this.onAir(item);
+  }
+
+  /** Planner view of a playing source (times relative to its trimmed start). */
+  describeSource(s) {
+    const d = { kind: s.kind, start: s.start / SR, len: s.len };
+    const m = s.markers || {};
+    if (s.kind === 'music') {
+      const st = m.startSec || 0;
+      d.endType = m.endType || null;
+      d.mixOut = m.mixOut != null ? m.mixOut - st : null;
+      d.vocalEnd = m.instrumental ? 0 : m.vocalEnd != null ? Math.max(0, m.vocalEnd - st) : null;
+      if (m.tailTempo) d.beat = { period: m.tailTempo.period, phase: m.tailTempo.phase - st, confidence: m.tailTempo.confidence };
+    } else Object.assign(d, { voiceStart: m.voiceStart, voiceEnd: m.voiceEnd, post: m.post, tailStart: m.tailStart });
+    return d;
+  }
+
+  describeNext(item) {
+    const p = item.prep;
+    const m = p.markers || {};
+    if (p.kind === 'music') {
+      const st = m.startSec || 0;
+      const len = (m.endSec || m.duration || item.duration || 240) - st;
+      return {
+        kind: 'music', len,
+        vocalStart: m.instrumental ? len : m.vocalStart != null ? Math.max(0, m.vocalStart - st) : null,
+        rampIn: m.rampIn || 0,
+        firstBeat: m.firstBeat != null ? Math.max(0, m.firstBeat - st) : null,
+        beat: m.headTempo ? { period: m.headTempo.period, confidence: m.headTempo.confidence } : null,
+      };
+    }
+    return { kind: p.kind, len: p.audio.durationSec, voiceStart: m.voiceStart, voiceEnd: m.voiceEnd, post: m.post, tailStart: m.tailStart };
+  }
+
+  // ------------------------------------------------------------------ on air
+
   onAir(item) {
     const st = store.station;
-    const z = zoned(new Date(), st.timezone);
     if (item.type === 'music') {
       if (!item.emergency) library.markPlayed(item.trackId);
       store.addHistory({ type: 'music', trackId: item.trackId, title: item.title, artist: item.artist, category: item.category });
       this.streamer.setTitle(`${item.artist} - ${item.title}`);
     } else if (item.type === 'spot') {
-      const day = (store.data.spotLog[z.dateKey] ||= {});
-      day[item.spotId] = (day[item.spotId] || 0) + 1;
+      const day = new Intl.DateTimeFormat('en-CA', { timeZone: st.timezone }).format(new Date());
+      const d = (store.data.spotLog[day] ||= {});
+      d[item.spotId] = (d[item.spotId] || 0) + 1;
       store.addHistory({ type: 'spot', spotId: item.spotId, title: item.title, artist: item.artist });
     } else {
       store.addHistory({ type: item.type, title: item.title, artist: item.artist, script: item.script });
-      if (item.type === 'toh_id' || item.type === 'id') this.streamer.setTitle(`${st.name} - ${st.slogan}`);
+      if (item.type === 'toh_id' || item.type === 'id') this.streamer.setTitle(`${st.name}${st.slogan ? ` - ${st.slogan}` : ''}`);
     }
-    log(`on air: [${item.type}] ${item.artist ? item.artist + ' - ' : ''}${item.title || ''}`);
+    log(`on air: [${item.type}] ${item.artist ? `${item.artist} - ` : ''}${item.title || ''}${item.transition ? ` (${item.transition.type})` : ''}`);
     this.emit('nowPlaying', this.publicItem(item));
     this.emit('state', this.state());
+    this.emit('timeline', this.timeline());
   }
-
-  // ---------------------------------------------------------------- live assist
 
   skip() {
-    if (!this.main) return;
-    this.forceNext = true;
+    if (!this.running) return;
+    this.uncue();
+    if (this.cue?.committed) return; // already in a transition
+    const r = this.scheduler.next(Date.now(), { urgent: true });
+    if (r.item && r.item.status === 'ready' && r.item.prep) this.planNext(r.item, { immediate: true });
+    else {
+      // nothing ready yet: pot everything down; dead-air protection takes over if needed
+      const f = this.frame;
+      for (const s of this.sources) if (!s.overlay) s.fade.ramp(f, f + Math.round(SR * 1.2), 0, 'cos');
+    }
   }
 
-  /** Fire a cart (imaging item) on top of whatever is playing. */
   async fireCart(imagingId) {
     const im = store.data.imaging.items.find((i) => i.id === imagingId);
     if (!im) throw new Error('cart not found');
-    const audio = await this.imagingAudio(im);
+    const el = await produceElement({ type: im.type, imagingId: im.id });
+    const audio = await loadAudio(el.file, { normalize: true, targetDb: -15 });
     const item = { id: `cart_${Date.now()}`, type: im.type, title: im.name, artist: 'Cart', status: 'playing' };
-    this.sources.push({ item, kind: 'imaging', overlay: true, pcm: audio.pcm, pos: audio.startFrame, startFrame: audio.startFrame, endFrame: audio.endFrame, gain: audio.gain });
+    this.sources.push(new BufferSource({ item, kind: 'imaging', start: this.frame + Math.round(SR * 0.05), audio, base: audio.gain, overlay: true }));
   }
 
-  // ---------------------------------------------------------------- preparation
+  emergency() {
+    this.deadAir = 0;
+    const ids = mono.cachedTrackIds().filter((id) => !(library.cleanOnly() && library.findTrack(id)?.explicit));
+    if (!ids.length) {
+      if (!this.warnedNoEmergency) { this.fail(new Error('Dead air: nothing ready and no local emergency audio')); this.warnedNoEmergency = true; }
+      return;
+    }
+    const id = ids[Math.floor(Math.random() * ids.length)];
+    const t = library.findTrack(id) || { title: 'Emergency audio', artist: store.station.name };
+    const decoder = new StreamDecoder({ file: mono.cachedPath(id), durationHint: t.duration, label: 'emergency' }).start();
+    const item = { id: `em_${Date.now()}`, type: 'music', trackId: id, title: t.title, artist: t.artist, artwork: t.artwork, emergency: true, status: 'playing' };
+    const src = new StreamSource({ item, kind: 'music', start: this.frame + Math.round(SR * 0.3), decoder, base: 1, markers: {}, lenHint: t.duration || 200 });
+    this.sources.push(src);
+    this.anchor = src;
+    log('dead air: emergency audio from the local cache');
+    this.onAir(item);
+  }
+
+  // ------------------------------------------------------------------ preparation
 
   async prepLoop() {
     if (!this.running) return;
-    const n = (store.settings.lookaheadItems || 3) + 1;
-    const upcoming = this.scheduler.upcoming(n);
-    // free audio for items that are no longer upcoming
+    const upcoming = this.scheduler.upcoming((store.settings.lookaheadItems || 3) + 1);
     const keep = new Set(upcoming.map((i) => i.id));
-    for (const id of this.prepared.keys()) {
-      const it = this.scheduler.findItem(id);
-      if (!keep.has(id) && (!it || !['ready'].includes(it.status))) this.prepared.delete(id);
-    }
+    for (const it of this.scheduler.allItems()) if (!keep.has(it.id) && it.prep && it.status !== 'cued') this.releasePrep(it);
+    // songs and spoken elements prepare in separate lanes, so a slow voice render never holds up music
+    const busy = { music: 0, other: 0 };
+    for (const id of this.preparing) busy[this.scheduler.findItem(id)?.type === 'music' ? 'music' : 'other']++;
     for (const it of upcoming) {
-      if (it.status !== 'scheduled' || this.preparing.has(it.id) || this.preparing.size >= 2) continue;
+      const lane = it.type === 'music' ? 'music' : 'other';
+      if (it.status !== 'scheduled' || this.preparing.has(it.id) || busy[lane] >= 2) continue;
+      busy[lane]++;
       this.prepare(it);
     }
+  }
+
+  releasePrep(it) {
+    if (!it.prep) return;
+    it.prep.decoder?.close();
+    it.prep = null;
+    if (['ready', 'cued', 'preparing'].includes(it.status)) it.status = 'scheduled';
   }
 
   async prepare(item) {
@@ -242,12 +488,13 @@ export class Playout extends EventEmitter {
     item.status = 'preparing';
     const t0 = Date.now();
     try {
-      const audio = await this.audioFor(item);
-      if (item.status !== 'preparing') return; // removed meanwhile
-      this.prepared.set(item.id, audio);
-      item.audioDuration = audio.durationSec;
+      const prep = item.type === 'music' ? await this.prepareMusic(item) : await this.prepareElement(item);
+      if (item.status !== 'preparing' || !this.running) { prep.decoder?.close(); return; } // removed or stopped meanwhile
+      item.prep = prep;
+      item.audioDuration = prep.kind === 'music' ? (prep.markers.endSec || prep.markers.duration || item.duration) - (prep.markers.startSec || 0) : prep.audio.durationSec;
+      item.markers = this.publicMarkers(prep);
       item.status = 'ready';
-      log(`ready: [${item.type}] ${item.title || ''} (${audio.durationSec.toFixed(1)}s, ${Date.now() - t0}ms)`);
+      log(`ready: [${item.type}] ${item.title || ''} (${Number(item.audioDuration).toFixed(1)}s, ${Date.now() - t0}ms)`);
     } catch (err) {
       item.error = err.message;
       if (item.type === 'music') {
@@ -263,102 +510,257 @@ export class Playout extends EventEmitter {
     }
   }
 
-  normalizeOpts(kind) {
-    // voice sits a touch hotter than music so it cuts through when ducked
-    return { normalize: store.settings.normalize !== false, targetDb: kind === 'music' ? -17 : kind === 'spot' ? -17 : -16 };
+  async prepareMusic(item) {
+    const track = library.findTrack(item.trackId) || { id: item.trackId, title: item.title, artist: item.artist, album: item.album, duration: item.duration, explicit: item.explicit };
+    if (library.cleanOnly() && track.explicit) throw new Error('explicit version blocked (clean versions only)');
+    const cached = track.analysis?.v === ANALYSIS_VERSION ? track.analysis : null;
+    const lyricsP = this.lyricsFor(track).catch(() => null);
+    const local = fs.existsSync(mono.cachedPath(track.id)) ? mono.cachedPath(track.id) : null;
+    const open = (file) => new StreamDecoder({
+      url: file ? undefined : mono.streamUrl(track.id), file: file || undefined, durationHint: track.duration,
+      maxAheadSec: 75, keepBehindSec: 45, label: `${track.artist} - ${track.title}`,
+    }).start();
+    let decoder = open(local);
+    try {
+      await this.preroll(decoder, track);
+    } catch (err) {
+      decoder.close();
+      if (local || store.settings.downloadFallback === false) throw err;
+      log(`stream failed for ${track.title} (${err.message}); downloading as a fallback`);
+      decoder = open(await mono.download(track.id));
+      await this.preroll(decoder, track);
+    }
+    const head = cached ? null : await analyze('head', decoder.range(0, Math.round(HEAD_SEC * SR)));
+    const lyrics = await Promise.race([lyricsP, sleep(4000).then(() => null)]);
+    const markers = this.musicMarkers(track, cached, head, lyrics);
+    const prep = { kind: 'music', decoder, markers, gain: this.musicGain(markers.loudness), trackId: track.id };
+    if (!cached || !cached.endType) {
+      const onEnd = () => this.analyzeTail(item, prep, track).catch((e) => log('tail analysis failed:', e.message));
+      if (decoder.ended) onEnd(); else decoder.once('end', onEnd);
+    }
+    decoder.on('error', (e) => log(`stream error (${track.title}): ${e.message}`));
+    return prep;
   }
 
-  async audioFor(item) {
+  preroll(decoder, track) {
+    const need = Math.round(Math.min(HEAD_SEC, Math.max(5, (track.duration || 200) - 2)) * SR);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => (decoder.decoded > SR * 12 ? resolve() : reject(new Error('stream too slow'))), 45_000);
+      const check = () => {
+        if (decoder.error) { clearTimeout(timer); reject(decoder.error); }
+        else if (decoder.decoded >= need || decoder.ended) { clearTimeout(timer); resolve(); }
+      };
+      decoder.on('progress', check);
+      decoder.on('end', check);
+      decoder.on('error', check);
+      check();
+    });
+  }
+
+  async lyricsFor(track) {
+    const fresh = track.lyrics && track.lyrics.status !== 'error' && Date.now() - (track.lyrics.checkedAt || 0) < 30 * 86400_000;
+    if (fresh) return track.lyrics;
+    const l = await lookupVocalTiming({ title: track.title, artist: track.artist, album: track.album, duration: track.duration });
+    if (l.status !== 'error' && library.findTrack(track.id)) library.updateTrack(track.id, { lyrics: { ...l, checkedAt: Date.now() } });
+    return l;
+  }
+
+  musicMarkers(track, cached, head, lyrics) {
+    const a = cached || {};
+    const manual = track.markers || {};
+    const ly = lyrics || track.lyrics || {};
+    return {
+      startSec: a.startSec ?? head?.startSec ?? 0,
+      endSec: a.endSec ?? null,
+      duration: a.duration ?? track.duration,
+      loudness: a.loudness ?? head?.loudness ?? -14,
+      rampIn: a.rampIn ?? head?.rampIn ?? 0,
+      firstBeat: a.firstBeat ?? head?.firstBeat ?? null,
+      headTempo: a.headTempo ?? head?.tempo ?? null,
+      tailTempo: a.tailTempo ?? null,
+      endType: manual.endType || a.endType || null,
+      mixOut: manual.mixOut ?? a.mixOut ?? null,
+      instrumental: ly.status === 'instrumental' || manual.instrumental === true,
+      vocalStart: manual.intro ?? (ly.status === 'found' ? ly.vocalStart : null),
+      vocalEnd: manual.outro ?? (ly.status === 'found' ? ly.vocalEnd : null),
+      vocalSource: manual.intro != null || manual.outro != null ? 'manual' : ly.status === 'found' ? 'lyrics' : ly.status === 'instrumental' ? 'instrumental' : 'unknown',
+    };
+  }
+
+  musicGain(loudness) {
+    const target = store.settings.musicLoudness ?? -16;
+    return dbToLin(Math.max(-12, Math.min(10, target - loudness)));
+  }
+
+  async analyzeTail(item, prep, track) {
+    const src = this.sources.find((s) => s.item === item);
+    const d = prep.decoder || src?.decoder;
+    if (!d) return;
+    const end = d.decoded;
+    const from = Math.max(0, end - Math.round(40 * SR));
+    const pcm = d.range(from, end);
+    if (!pcm) return;
+    const loudness = d.loudness();
+    const tail = await analyze('tail', pcm, { offsetSec: from / SR, refLoudness: loudness });
+    const m = prep.markers;
+    Object.assign(m, {
+      endSec: tail.endSec, endType: track.markers?.endType || tail.endType, mixOut: track.markers?.mixOut ?? tail.mixOut,
+      tailTempo: tail.tempo, duration: end / SR, loudness,
+    });
+    const analysis = {
+      v: ANALYSIS_VERSION, analyzedAt: Date.now(), duration: end / SR, loudness: Math.round(loudness * 10) / 10,
+      startSec: m.startSec, endSec: tail.endSec, rampIn: m.rampIn, firstBeat: m.firstBeat, headTempo: m.headTempo,
+      tailTempo: tail.tempo, endType: tail.endType, mixOut: tail.mixOut, lastLoud: tail.lastLoud,
+    };
+    if (library.findTrack(track.id)) library.updateTrack(track.id, { analysis });
+    try {
+      const pk = d.peaksArray();
+      fs.writeFileSync(path.join(PEAKS_DIR, `${track.id}.i8`), Buffer.from(pk.buffer, pk.byteOffset, pk.byteLength));
+    } catch { /* best effort */ }
+    const live = this.sources.find((s) => s.item === item);
+    if (live) {
+      live.trimEnd = Math.round(tail.endSec * SR);
+      live.markers = m;
+      // a plan made on estimated markers is redone now that the real ending is known
+      if (live === this.anchor && this.cue && !this.cue.committed) this.uncue();
+    }
+    item.markers = this.publicMarkers({ kind: 'music', markers: m });
+    item.audioDuration = tail.endSec - (m.startSec || 0);
+    this.emit('log');
+  }
+
+  async prepareElement(item) {
     const kind = KIND[item.type];
-    if (kind === 'music') {
-      const file = await mono.download(item.trackId);
-      return loadAudio(file, this.normalizeOpts('music'));
-    }
-    if (kind === 'imaging') {
-      const im = store.data.imaging.items.find((i) => i.id === item.imagingId);
-      if (!im) throw new Error('imaging item deleted');
-      return this.imagingAudio(im);
-    }
-    if (kind === 'spot') {
-      const spot = store.data.spots.find((s) => s.id === item.spotId);
-      if (!spot) throw new Error('spot deleted');
-      if (spot.file) return loadAudio(path.join(UPLOAD_DIR, spot.file), this.normalizeOpts('spot'));
-      if (!ttsAvailable()) throw new Error('spot has no audio and no TTS is configured');
-      const voice = spot.voice?.elevenLabsVoiceId || spot.voice?.openaiVoice ? spot.voice : store.data.imaging.voice;
-      return loadAudio(await synthesize(spot.text, voice), this.normalizeOpts('spot'));
-    }
-    // voice: DJ / weather / traffic / news / live read
-    if (!item.script) {
+    if (kind === 'voice' && !item.script) {
       const ctx = this.scheduler.contextFor(item);
-      const kindName = item.type === 'dj' ? item.mode || 'auto' : item.type;
-      const res = await writeBreak({ kind: kindName, ...ctx, at: this.estimateAirTime(item) });
+      const breakKind = item.type === 'dj' ? item.mode || 'auto' : item.type;
+      const np = ctx.nextItem?.prep;
+      const talkWindow = np?.kind === 'music' && np.markers.vocalStart != null ? Math.max(0, np.markers.vocalStart - (np.markers.startSec || 0)) : null;
+      const res = await writeBreak({ kind: breakKind, ...ctx, at: this.estimateAirTime(item), talkWindow });
       item.script = res.text;
       item.persona = res.persona?.name;
       item.artist = res.persona?.name || item.artist;
     }
-    if (!ttsAvailable()) throw new Error('no TTS provider configured — script written but not voiced');
-    const persona = store.data.personas.find((p) => p.name === item.persona) || personaFor(this.estimateAirTime(item));
-    return loadAudio(await synthesize(item.script, persona?.voice || {}), this.normalizeOpts('voice'));
-  }
-
-  async imagingAudio(im) {
-    if (im.file) return loadAudio(path.join(UPLOAD_DIR, im.file), this.normalizeOpts('imaging'));
-    if (!ttsAvailable()) throw new Error('imaging has no audio file and no TTS is configured');
-    return loadAudio(await synthesize(renderImagingText(im.text), store.data.imaging.voice), this.normalizeOpts('imaging'));
+    const el = await produceElement(item);
+    const audio = await loadAudio(el.file, { normalize: store.settings.normalize !== false, targetDb: kind === 'spot' ? -16 : -15 });
+    const off = audio.startFrame / SR;
+    const len = audio.durationSec;
+    const rel = (t, dflt) => Math.min(len, Math.max(0, (t ?? dflt) - off));
+    const markers = {
+      voiceStart: rel(el.markers?.voiceStart, off),
+      voiceEnd: rel(el.markers?.voiceEnd, off + len),
+      post: rel(el.markers?.post ?? el.markers?.voiceEnd, off + len),
+      tailStart: rel(el.markers?.tailStart, off + len),
+    };
+    return { kind, audio, markers, peaks: computePeaks(audio.pcm.subarray(audio.startFrame * 2, audio.endFrame * 2), PEAK_SECONDS) };
   }
 
   estimateAirTime(item) {
     let t = Date.now();
-    if (this.main) t += ((this.main.endFrame - this.main.pos) / SAMPLE_RATE) * 1000;
+    const a = this.anchor;
+    if (a && !a.done) t += Math.max(0, a.len - a.position) * 1000;
     for (const it of this.scheduler.pendingItems()) {
       if (it.id === item.id) break;
+      if (it.status === 'playing') continue;
       t += (it.audioDuration || estDuration(it)) * 1000;
     }
     return t;
   }
 
-  async loadEmergency() {
-    try {
-      const upcoming = new Set(this.scheduler.pendingItems().map((i) => i.trackId).filter(Boolean));
-      const all = mono.cachedTrackIds();
-      const ids = all.filter((id) => !upcoming.has(id)).length ? all.filter((id) => !upcoming.has(id)) : all;
-      if (!ids.length) return;
-      const id = ids[Math.floor(Math.random() * ids.length)];
-      const t = library.findTrack(id) || { title: 'Emergency audio', artist: store.station.name };
-      const audio = await loadAudio(mono.cachedPath(id), this.normalizeOpts('music'));
-      this.emergency = { audio, item: { id: `em_${Date.now()}`, type: 'music', trackId: id, title: t.title, artist: t.artist, artwork: t.artwork, emergency: true, status: 'ready' } };
-    } catch (err) {
-      log('emergency load failed:', err.message);
-    }
-  }
+  // ------------------------------------------------------------------ UI data
 
-  // ---------------------------------------------------------------- state for the UI
+  publicMarkers(prep) {
+    const m = prep.markers || {};
+    if (prep.kind !== 'music') return { voiceStart: m.voiceStart, voiceEnd: m.voiceEnd, post: m.post };
+    const st = m.startSec || 0;
+    const r = (x) => (x == null ? null : Math.round((x - st) * 100) / 100);
+    return {
+      intro: m.instrumental ? null : r(m.vocalStart), outro: m.instrumental ? null : r(m.vocalEnd), mixOut: r(m.mixOut),
+      endType: m.endType, rampIn: m.rampIn, bpm: m.headTempo?.bpm || m.tailTempo?.bpm || null,
+      vocalSource: m.vocalSource, loudness: m.loudness != null ? Math.round(m.loudness * 10) / 10 : null, instrumental: m.instrumental,
+    };
+  }
 
   publicItem(i) {
     if (!i) return null;
-    return { id: i.id, type: i.type, title: i.title, artist: i.artist, artwork: i.artwork, script: i.script, category: i.category, airedAt: i.airedAt, duration: i.audioDuration, album: i.album, year: i.year };
+    return { id: i.id, type: i.type, title: i.title, artist: i.artist, artwork: i.artwork, script: i.script, category: i.category, airedAt: i.airedAt, duration: i.audioDuration, album: i.album, year: i.year, markers: i.markers, transition: i.transition };
+  }
+
+  /** Waveform overview for an item (progressive while a song is still decoding). */
+  peaksFor(id) {
+    const src = this.sources.find((s) => s.item.id === id);
+    const it = src?.item || this.scheduler.findItem(id);
+    let arr = null; let offset = 0;
+    if (src?.decoder) { arr = src.decoder.peaksArray(); offset = src.trimStart / SR; }
+    else if (src?.prep?.peaks) arr = src.prep.peaks;
+    else if (it?.prep?.decoder) { arr = it.prep.decoder.peaksArray(); offset = it.prep.markers.startSec || 0; }
+    else if (it?.prep?.peaks) arr = it.prep.peaks;
+    else if (it?.trackId) {
+      const f = path.join(PEAKS_DIR, `${it.trackId}.i8`);
+      if (fs.existsSync(f)) { const b = fs.readFileSync(f); arr = new Int8Array(b.buffer, b.byteOffset, b.length); offset = library.findTrack(it.trackId)?.analysis?.startSec || 0; }
+    }
+    if (!arr) return null;
+    const skip = Math.min(arr.length, Math.round(offset / PEAK_SECONDS) * 2);
+    const data = arr.subarray(skip);
+    return { id, res: PEAK_SECONDS, complete: !(src?.decoder && !src.decoder.ended), data: Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64') };
+  }
+
+  timeline() {
+    const nowF = this.frame;
+    const rel = (f) => Math.round(((f - nowF) / SR) * 100) / 100;
+    const lane = (l) => l.pts.filter((p) => Number.isFinite(p.f) && p.f > nowF - SR * 30).map((p) => [rel(p.f), Math.round(p.v * 1000) / 1000]);
+    const items = this.sources.map((s) => ({
+      id: s.item.id, type: s.item.type, kind: s.kind, title: s.item.title, artist: s.item.artist, overlay: s.overlay,
+      start: rel(s.start), len: Math.round(s.len * 100) / 100, pos: Math.round(s.position * 100) / 100,
+      markers: s.item.markers || null, fade: lane(s.fade), duck: lane(s.duck), playing: true,
+    }));
+    if (this.bed) {
+      const b = this.bed;
+      items.push({ id: 'bed', type: 'bed', kind: 'bed', title: b.item.title, artist: 'Auto-bed', overlay: true, start: rel(b.start), len: Math.round(((nowF - b.start) / SR + 2) * 100) / 100, pos: Math.round(((nowF - b.start) / SR) * 100) / 100, fade: lane(b.fade), duck: [], playing: true, on: b.on });
+    }
+    const mains = this.sources.filter((s) => !s.overlay && !s.done);
+    let cursor = this.cue ? this.cue.startFrame : nowF + Math.max(0, ...mains.map((s) => s.start + Math.round(s.len * SR) - nowF));
+    const upcoming = this.scheduler.pendingItems().filter((i) => i.status !== 'playing').slice(0, 6);
+    for (const it of upcoming) {
+      const isCue = this.cue?.item === it;
+      const start = isCue ? this.cue.startFrame : cursor;
+      const len = it.audioDuration || estDuration(it);
+      items.push({
+        id: it.id, type: it.type, kind: KIND[it.type], title: it.title, artist: it.artist, start: rel(start), len: Math.round(len * 100) / 100,
+        markers: it.markers || null, cued: isCue, estimated: !isCue, status: it.status, transition: it.transition || null,
+      });
+      cursor = start + Math.round(Math.max(1, len - (KIND[it.type] === 'music' ? 3 : 0)) * SR);
+    }
+    return { now: Math.round((nowF / SR) * 100) / 100, wall: Date.now(), items };
   }
 
   state() {
-    const m = this.main;
+    const a = this.anchor && !this.anchor.done ? this.anchor : null;
+    let now = null;
+    if (a) {
+      const mk = a.item.markers || {};
+      now = { ...this.publicItem(a.item), position: Math.round(a.position * 100) / 100, length: Math.round(a.len * 100) / 100, intro: mk.intro, outro: mk.outro, endType: mk.endType };
+    }
     return {
       running: this.running,
-      now: m ? {
-        ...this.publicItem(m.item),
-        position: (m.pos - m.startFrame) / SAMPLE_RATE,
-        length: (m.endFrame - m.startFrame) / SAMPLE_RATE,
-      } : null,
-      overlays: this.sources.filter((s) => s !== m).map((s) => ({ title: s.item.title, type: s.item.type, remaining: (s.endFrame - s.pos) / SAMPLE_RATE })),
+      now,
+      next: this.cue ? { ...this.publicItem(this.cue.item), in: Math.round(((this.cue.startFrame - this.frame) / SR) * 10) / 10 } : null,
+      overlays: this.sources.filter((s) => s.overlay && !s.done).map((s) => ({ title: s.item.title, type: s.item.type, remaining: Math.max(0, s.len - s.position) })),
       listeners: this.streamer.listeners.size,
       icecast: this.streamer.icecastStatus,
-      deadAir: this.running && !this.sources.length,
+      deadAir: this.running && !this.sources.some((s) => !s.done && !s.overlay),
       lastError: this.lastError,
-      level: this.level,
-      emergencyReady: Boolean(this.emergency),
+      decks: this.deckStats(),
+      bed: { on: Boolean(this.bed?.on), name: this.bedAudio?.name || null, ready: Boolean(this.bedAudio) },
+      processing: { preset: this.processor.p.preset, bypass: this.processor.p.bypass, loudness: this.processor.loudness() },
+      wall: Date.now(),
     };
   }
-}
 
-export function uploadExists(file) {
-  return file && fs.existsSync(path.join(UPLOAD_DIR, file));
+  deckStats() {
+    const out = [];
+    for (const s of this.sources) if (s.decoder) out.push({ id: s.item.id, title: s.item.title, playing: true, underrun: s.underrun > 0, ...s.decoder.stats() });
+    for (const it of this.scheduler.allItems()) if (it.prep?.decoder) out.push({ id: it.id, title: it.title, playing: false, ...it.prep.decoder.stats() });
+    return out;
+  }
 }

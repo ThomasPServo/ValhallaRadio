@@ -1,0 +1,93 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { BroadcastProcessor, resolveParams, LoudnessMeter, PRESETS } from '../server/audio/processor.js';
+
+const FS = 44100;
+
+function stereoSine(seconds, freq, amp) {
+  const n = Math.floor(seconds * FS);
+  const buf = new Float32Array(n * 2);
+  for (let i = 0; i < n; i++) { const v = Math.sin((2 * Math.PI * freq * i) / FS) * amp; buf[i * 2] = v; buf[i * 2 + 1] = v; }
+  return buf;
+}
+const rms = (buf, from = 0) => { let s = 0; let n = 0; for (let i = from * 2; i < buf.length; i += 2) { s += buf[i] * buf[i]; n++; } return Math.sqrt(s / n); };
+
+test('multiband crossover tree sums flat (phase-compensated LR4) when no compression is applied', () => {
+  const params = resolveParams('streaming', {
+    agc: { enabled: false }, phaseRotator: true, stereo: { width: 1 },
+    eq: { bassDb: 0, warmthDb: 0, presenceDb: 0, airDb: 0 },
+    multiband: { drive: 0, bands: [0, 1, 2, 3, 4].map(() => ({ thresholdDb: 20, makeupDb: 0 })) },
+    clipper: { enabled: false }, limiter: { ceilingDb: 0 }, outputGainDb: 0,
+  });
+  for (const f of [110, 250, 420, 1000, 2000, 4000, 6200, 12000, 16000]) {
+    const proc = new BroadcastProcessor(FS, params);
+    const buf = stereoSine(1, f, 0.25);
+    const inRms = rms(buf, FS / 2);
+    proc.process(buf, buf.length / 2);
+    const outRms = rms(buf, FS / 2);
+    const db = 20 * Math.log10(outRms / inRms);
+    assert.ok(Math.abs(db) < 0.1, `${f} Hz: ${db.toFixed(2)} dB`);
+  }
+});
+
+test('the only low-end loss is the 28 Hz subsonic filter (2 x 2nd-order Butterworth)', () => {
+  const params = resolveParams('streaming', { agc: { enabled: false }, stereo: { width: 1 }, eq: { bassDb: 0, warmthDb: 0, presenceDb: 0, airDb: 0 }, multiband: { drive: 0, bands: [0, 1, 2, 3, 4].map(() => ({ thresholdDb: 20 })) }, clipper: { enabled: false }, limiter: { ceilingDb: 0 }, outputGainDb: 0 });
+  const proc = new BroadcastProcessor(FS, params);
+  const buf = stereoSine(1, 60, 0.25);
+  const inRms = rms(buf, FS / 2);
+  proc.process(buf, buf.length / 2);
+  const db = 20 * Math.log10(rms(buf, FS / 2) / inRms);
+  const ratio = 60 / 28; const butter = 20 * Math.log10(ratio ** 2 / Math.sqrt(1 + ratio ** 4));
+  assert.ok(Math.abs(db - 2 * butter) < 0.1, `60 Hz ${db.toFixed(2)} vs expected ${(2 * butter).toFixed(2)}`);
+});
+
+test('limiter output never exceeds the ceiling, even for very hot input', () => {
+  const proc = new BroadcastProcessor(FS, resolveParams('chr', { inputGainDb: 12 }));
+  const buf = stereoSine(2, 220, 0.9);
+  proc.process(buf, buf.length / 2);
+  let peak = 0;
+  for (const v of buf) peak = Math.max(peak, Math.abs(v));
+  assert.ok(peak <= 10 ** (-1 / 20) + 1e-6, `peak ${20 * Math.log10(peak)} dBFS`);
+  const m = proc.meters();
+  assert.ok(m.limiter >= 0 && m.out.tp <= 0.5, JSON.stringify({ lim: m.limiter, tp: m.out.tp }));
+});
+
+test('BS.1770 meter: stereo 1 kHz sine at -20 dBFS reads -20 LUFS', () => {
+  const meter = new LoudnessMeter(FS);
+  const buf = stereoSine(4, 1000, 0.1);
+  for (let i = 0; i < buf.length; i += 2) meter.push(buf[i], buf[i + 1]);
+  assert.ok(Math.abs(meter.shortTerm + 20) < 0.15, `short-term ${meter.shortTerm}`);
+  assert.ok(Math.abs(meter.integrated() + 20) < 0.15, `integrated ${meter.integrated()}`);
+});
+
+test('AGC rides a quiet programme up toward its target', () => {
+  const proc = new BroadcastProcessor(FS, resolveParams('ac'));
+  const buf = stereoSine(8, 440, 0.03); // about -33 dBFS RMS, well below target
+  proc.process(buf, buf.length / 2);
+  const m = proc.meters();
+  assert.ok(m.agc > 3, `agc gain ${m.agc} dB`);
+});
+
+test('every preset processes 1 s of stereo audio comfortably faster than real time', () => {
+  for (const id of Object.keys(PRESETS)) {
+    const proc = new BroadcastProcessor(FS, resolveParams(id));
+    const buf = stereoSine(1, 330, 0.5);
+    const t0 = performance.now();
+    proc.process(buf, buf.length / 2);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 400, `${id}: ${ms.toFixed(0)} ms for 1 s`);
+    for (const v of buf) assert.ok(Number.isFinite(v));
+  }
+});
+
+test('meter snapshot has spectrum, gain reduction and correlation', () => {
+  const proc = new BroadcastProcessor(FS, resolveParams('chr'));
+  const buf = stereoSine(1, 1000, 0.5);
+  proc.process(buf, buf.length / 2);
+  const m = proc.meters();
+  assert.equal(m.spectrum.length, 30);
+  assert.equal(m.bands.length, 5);
+  assert.ok(m.corr > 0.99, `mono signal correlation ${m.corr}`);
+  const peakBand = m.spectrum.indexOf(Math.max(...m.spectrum));
+  assert.equal([1000][0], [25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000][peakBand], 'spectrum peaks at 1 kHz');
+});

@@ -12,43 +12,65 @@ export function defaultDb() {
   return {
     version: 1,
     station: {
-      name: 'Valhalla Radio',
-      callSign: 'VLHR',
-      frequency: '101.9 FM',
-      slogan: 'The Sound of the Gods',
-      format: 'Hot Adult Contemporary: upbeat pop, pop-rock and dance hits from the 2000s to today, with a few classic 80s and 90s gold tracks.',
+      // "Valhalla" is the software; the station is yours. setupComplete=false opens the setup wizard.
+      setupComplete: false,
+      formatId: '',
+      name: 'My Station',
+      callSign: '',
+      frequency: '',
+      slogan: '',
+      format: 'Hot Adult Contemporary: upbeat pop and pop-rock hits from the 2000s to today, with a few 80s and 90s gold tracks.',
       language: 'English',
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+      timezoneMode: 'auto', // 'auto' follows the primary market location; 'manual' keeps the chosen zone
       units: 'imperial',
+      logo: '',
+      website: '',
+      email: '',
+      phone: '',
+      socials: { instagram: '', x: '', tiktok: '', facebook: '', youtube: '' },
       market: {
         name: '',
         description: '',
-        locations: [], // { name, lat, lon, kind: 'city'|'county' }
+        locations: [], // { name, lat, lon, kind: 'city'|'county', bbox, timezone }
       },
     },
     settings: {
+      // AI: 'auto' uses your Claude Code login when available, otherwise an API key
+      claudeProvider: 'auto',
+      claudeCliPath: '',
       anthropicApiKey: '',
       claudeModel: 'claude-opus-5-5',
-      claudeFastModel: 'claude-opus-5-5',
       useClaudeForMusic: true,
+      cleanOnly: true, // broadcast-safe: explicit songs are swapped for clean radio edits or never aired
       allowDiscovery: true, // let Claude pull new music from monochrome when the library runs thin
       monochromeBase: 'https://tracks.monochrome.st',
-      monochromeFallbackBase: 'https://api.monochrome.tf',
-      quality: 'LOSSLESS',
-      ttsProvider: 'none', // 'elevenlabs' | 'openai' | 'none'
+      // Voice: 'auto' = ElevenLabs if keyed, else the free local Kokoro voice, else OpenAI
+      ttsProvider: 'auto',
       elevenLabsApiKey: '',
       elevenLabsModel: 'eleven_multilingual_v2',
       openaiApiKey: '',
       openaiBaseUrl: 'https://api.openai.com/v1',
       openaiTtsModel: 'gpt-4o-mini-tts',
-      tomtomApiKey: '',
       newsFeeds: [], // extra RSS urls
-      crossfadeSec: 3,
-      talkOverSec: 6, // how far a DJ break may run over the next song's intro
-      duckDb: -11,
+      trafficFeeds: [], // extra keyless traffic feeds: RSS or WZDx GeoJSON urls
+      // Transitions
+      duckDb: -12, // music under the DJ
+      postGap: 0.5, // vocals hit this long after the talk ends
+      talkOverOutroMax: 6,
+      beatMatch: true,
+      musicLoudness: -16, // per-song level before processing (LUFS)
       normalize: true,
       lookaheadItems: 3,
-      musicCacheMaxMb: 4096,
+      // Production
+      production: { imagingFx: true, infoBeds: true },
+      // Auto-bed: a music bed under DJ talk whenever there's no song intro or outro to talk over
+      autoBed: { enabled: true, levelDb: -12, bed: 'auto' }, // bed: 'auto' | 'synth:<style>' | uploaded bed id
+      // Auto-sweeper creator: fresh imaging written and produced every `everyDays`, newest `keep` stay in rotation
+      autoImaging: { enabled: true, everyDays: 7, perRun: 6, keep: 18, lastRun: 0 },
+      // Audio sourcing: stream songs; download only when streaming fails
+      downloadFallback: true,
+      musicCacheMaxMb: 2048,
     },
     stream: {
       bitrate: 128,
@@ -144,17 +166,17 @@ export function defaultDb() {
         id: 'dj_max',
         name: 'Max',
         style: 'Warm, quick-witted morning-show host in his 30s. Conversational, a little self-deprecating, loves music trivia. Never cheesy "radio voice". Talks like a real person to one listener.',
-        voice: { elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB', openaiVoice: 'ash', instructions: 'Upbeat, warm, conversational radio host. Natural pacing with a smile in the voice.' },
+        voice: { kokoroVoice: 'am_michael', elevenLabsVoiceId: 'pNInz6obpgDQGcFmaJgB', openaiVoice: 'ash', instructions: 'Upbeat, warm, conversational radio host. Natural pacing with a smile in the voice.' },
       },
       {
         id: 'dj_nova',
         name: 'Nova',
         style: 'Smooth, confident, friendly host in her late 20s. Genuine enthusiasm about the music, a bit playful, relaxed delivery. Talks to the listener like a friend riding along.',
-        voice: { elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL', openaiVoice: 'coral', instructions: 'Relaxed, friendly, slightly playful radio host. Smooth, intimate delivery.' },
+        voice: { kokoroVoice: 'af_heart', elevenLabsVoiceId: 'EXAVITQu4vr4xnSDxMaL', openaiVoice: 'coral', instructions: 'Relaxed, friendly, slightly playful radio host. Smooth, intimate delivery.' },
       },
     ],
     imaging: {
-      voice: { elevenLabsVoiceId: 'onwK4e9ZLuTAKqWW03F9', openaiVoice: 'onyx', instructions: 'Deep, powerful, polished radio station imaging voice. Punchy and dramatic.' },
+      voice: { kokoroVoice: 'am_michael', elevenLabsVoiceId: 'onwK4e9ZLuTAKqWW03F9', openaiVoice: 'onyx', instructions: 'Deep, powerful, polished radio station imaging voice. Punchy and dramatic.' },
       items: [
         { id: 'img_toh1', type: 'toh_id', name: 'Legal ID 1', text: '{callSign}, {frequency}. {slogan}. {market}.', file: '', enabled: true },
         { id: 'img_id1', type: 'id', name: 'Station ID 1', text: '{name}. {slogan}.', file: '', enabled: true },
@@ -164,6 +186,7 @@ export function defaultDb() {
         { id: 'img_liner1', type: 'liner', name: 'Into Stopset', text: '{name} will be right back.', file: '', enabled: true },
       ],
     },
+    processing: { preset: 'streaming', overrides: {} },
     advertisers: [],
     spots: [], // { id, advertiserId, title, text, file, durationSec, startDate, endDate, maxPerDay, dayparts:[], enabled }
     library: [], // tracks
@@ -186,10 +209,14 @@ class Store {
         const defaults = defaultDb();
         this.data = { ...defaults, ...parsed };
         // back-fill nested objects that may gain keys over time
-        for (const key of ['station', 'settings', 'stream', 'rotation', 'imaging']) {
+        for (const key of ['station', 'settings', 'stream', 'rotation', 'imaging', 'processing']) {
           this.data[key] = { ...defaults[key], ...(parsed[key] || {}) };
         }
         this.data.station.market = { ...defaults.station.market, ...(parsed.station?.market || {}) };
+        this.data.station.socials = { ...defaults.station.socials, ...(parsed.station?.socials || {}) };
+        this.data.settings.production = { ...defaults.settings.production, ...(parsed.settings?.production || {}) };
+        this.data.settings.autoBed = { ...defaults.settings.autoBed, ...(parsed.settings?.autoBed || {}) };
+        this.data.settings.autoImaging = { ...defaults.settings.autoImaging, ...(parsed.settings?.autoImaging || {}) };
         this.data.stream.icecast = { ...defaults.stream.icecast, ...(parsed.stream?.icecast || {}) };
       }
     } catch (err) {
@@ -198,15 +225,9 @@ class Store {
     // Environment variables seed secrets without having to type them into the UI.
     const s = this.data.settings;
     if (!s.anthropicApiKey && process.env.ANTHROPIC_API_KEY) s.anthropicApiKey = process.env.ANTHROPIC_API_KEY;
-    if (!s.elevenLabsApiKey && process.env.ELEVENLABS_API_KEY) {
-      s.elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
-      if (s.ttsProvider === 'none') s.ttsProvider = 'elevenlabs';
-    }
-    if (!s.openaiApiKey && process.env.OPENAI_API_KEY) {
-      s.openaiApiKey = process.env.OPENAI_API_KEY;
-      if (s.ttsProvider === 'none') s.ttsProvider = 'openai';
-    }
-    if (!s.tomtomApiKey && process.env.TOMTOM_API_KEY) s.tomtomApiKey = process.env.TOMTOM_API_KEY;
+    if (!s.elevenLabsApiKey && process.env.ELEVENLABS_API_KEY) s.elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
+    if (!s.openaiApiKey && process.env.OPENAI_API_KEY) s.openaiApiKey = process.env.OPENAI_API_KEY;
+    delete s.tomtomApiKey; // traffic is keyless now
   }
 
   save() {
@@ -227,7 +248,7 @@ class Store {
   /** Settings safe to send to the browser (secrets masked). */
   publicSettings() {
     const s = { ...this.data.settings };
-    for (const k of ['anthropicApiKey', 'elevenLabsApiKey', 'openaiApiKey', 'tomtomApiKey']) {
+    for (const k of ['anthropicApiKey', 'elevenLabsApiKey', 'openaiApiKey']) {
       s[k] = s[k] ? '••••' + String(s[k]).slice(-4) : '';
     }
     return s;

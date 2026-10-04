@@ -58,7 +58,9 @@ const SUGGEST_SCHEMA = {
 
 function fmtTrack(t, at) {
   const hrs = t.lastPlayed ? Math.round((at - t.lastPlayed) / 3600_000) + 'h ago' : 'never';
-  const bits = [t.year, t.energy ? `energy ${t.energy}` : null, (t.tags || []).join('/') || null, `last ${hrs}`].filter(Boolean);
+  const intro = t.markers?.intro ?? (t.lyrics?.status === 'found' ? t.lyrics.vocalStart : null);
+  const bpm = t.analysis?.headTempo?.confidence >= 0.8 ? Math.round(t.analysis.headTempo.bpm) : null;
+  const bits = [t.year, t.energy ? `energy ${t.energy}` : null, (t.tags || []).join('/') || null, intro != null ? `intro ${Math.round(intro)}s` : null, bpm ? `${bpm} bpm` : null, `last ${hrs}`].filter(Boolean);
   return `${t.id} | ${t.artist} - ${t.title} (${bits.join(', ')})`;
 }
 
@@ -71,7 +73,7 @@ function fmtTrack(t, at) {
  */
 export async function selectForHour({ at, slots, daypart, planned: plannedElsewhere = [] }) {
   const { categories, rotation } = store.data;
-  const lib = store.data.library;
+  const lib = library.playable(); // clean-only aware
   const tz = store.station.timezone;
   const plays = [...library.musicPlays(), ...plannedElsewhere];
   const result = new Map();
@@ -113,6 +115,7 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
           'You are the music director of a professional commercial radio station. You build each hour so it flows: ' +
           'vary tempo and energy in a pleasing arc, avoid two similar-sounding songs back to back, mix eras and male/female/group artists, ' +
           'open the hour strong, make songs after a stopset familiar and high-energy to win listeners back, and match the daypart mood. ' +
+          'Right after a DJ break, prefer a song with an instrumental intro of 5+ seconds (intro shown in the list) so the DJ can talk up to the vocals. ' +
           'Never use the same track or artist twice in the hour. Prefer songs that are more "due" (played longer ago) when the choice is otherwise close.',
         prompt,
         maxTokens: 6000,
@@ -148,7 +151,7 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
     }
     if (!chosen) {
       // category empty: borrow from any category so there's never dead air
-      chosen = lib.filter((t) => !t.disabled && !used.has(t.id))
+      chosen = lib.filter((t) => !used.has(t.id))
         .find((t) => checkRules(t, { ...ctx, category: { minRestHours: 0 } }).ok) || null;
       why = chosen ? `borrowed (category ${s.category} empty)` : '';
     }
@@ -173,6 +176,7 @@ export async function discover({ category = 'N', count = 10, guidance = '' } = {
       `Market: ${store.station.market?.name || 'general'}`,
       `Categories: ${cats}`,
       `Suggest ${count} songs for category "${category}" that fit this format${guidance ? `. Extra direction: ${guidance}` : ''}.`,
+      library.cleanOnly() ? 'The station only airs clean versions: suggest songs that have a clean radio edit (no songs that only exist with explicit lyrics).' : '',
       'Use the requested category for every song. Energy is 1 (mellow) to 5 (peak).',
       'Do not repeat anything already in the library:',
       existing || '(library is empty)',
@@ -201,7 +205,7 @@ async function topUpThinCategories(slots) {
   const need = {};
   for (const s of slots) need[s.category] = (need[s.category] || 0) + 1;
   for (const [cat, n] of Object.entries(need)) {
-    const have = store.data.library.filter((t) => t.category === cat && !t.disabled).length;
+    const have = library.playable().filter((t) => t.category === cat).length;
     // keep at least ~4x the hourly usage in each category so rotation rules have room
     if (have < n * 4) await discover({ category: cat, count: Math.max(8, n * 4 - have) });
   }
