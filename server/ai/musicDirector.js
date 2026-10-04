@@ -166,7 +166,7 @@ export async function selectForHour({ at, slots, daypart, planned: plannedElsewh
 
 /** Ask Claude for songs that fit the format, resolve them on monochrome, add them to the library. */
 export async function discover({ category = 'N', count = 10, guidance = '' } = {}) {
-  if (!claudeAvailable()) throw new Error('Music discovery needs Claude: sign in to Claude Code on this machine, or add an Anthropic API key.');
+  if (!claudeAvailable()) throw new Error('Music discovery needs an AI: sign in to Claude Code or Codex, start LM Studio, or add an API key (Settings → AI).');
   const cats = store.data.categories.map((c) => `${c.id} = ${c.name}`).join(', ');
   const existing = store.data.library.slice(-300).map((t) => `${t.artist} - ${t.title}`).join('\n');
   const out = await claudeJson({

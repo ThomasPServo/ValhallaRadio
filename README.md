@@ -8,7 +8,7 @@ Radio automation for the AI era: a complete station in a box. Name your station,
 
 | | How Valhalla does it |
 |---|---|
-| AI | Your **Claude Code** login (subscription), via the local `claude` CLI. An Anthropic API key is an optional fallback. |
+| AI | A subscription you already have: **Claude Code** (`claude`, Claude Sonnet 5.5 by default) or **ChatGPT via Codex** (`codex`). Or fully offline on a local model in **LM Studio**. Anthropic and OpenAI API keys are optional. |
 | Voice | A free **local neural voice** (Kokoro), installed on demand from the studio. ElevenLabs/OpenAI are optional. |
 | Music | **[monochrome](https://github.com/monochrome-music/monochrome)** (`tracks.monochrome.st`), streamed losslessly. Songs are downloaded only when streaming fails. |
 | Weather | **National Weather Service** (US, public domain) and **MET Norway** (worldwide). Sunrise and sunset are computed locally. |
@@ -19,7 +19,11 @@ Radio automation for the AI era: a complete station in a box. Name your station,
 
 ## Quick start
 
-Requirements: **Node.js 22.9+** and **ffmpeg** (`apt install ffmpeg` / `brew install ffmpeg`). For AI, install [Claude Code](https://claude.com/claude-code) and sign in once by running `claude`.
+Requirements: **Node.js 22.9+** and **ffmpeg** (`apt install ffmpeg` / `brew install ffmpeg`). For AI, use any one of these:
+
+- **Claude Code:** install [Claude Code](https://claude.com/claude-code) and sign in once by running `claude`.
+- **ChatGPT:** install [Codex](https://github.com/openai/codex) (`npm i -g @openai/codex`) and run `codex login`.
+- **Local model:** start [LM Studio](https://lmstudio.ai)'s server with a model loaded.
 
 ```bash
 npm install
@@ -31,14 +35,18 @@ Open **http://localhost:8080**. The setup wizard walks you through five steps:
 1. **Your station:** name, slogan, call letters and frequency.
 2. **Format:** Top 40, Hot AC, AC, Classic Hits, Classic Rock, Alternative, Country, Hip-Hop & R&B, or Dance.
 3. **Market:** one or more cities or whole counties, units, and *clean versions only*.
-4. **AI & voice:** shows the Claude Code status and installs the local voice with one click.
+4. **AI & voice:** shows which AI is connected and installs the local voice with one click.
 5. **Launch:** builds a starter library of about 100 songs, asks Claude for fresh picks, renders your imaging and music bed, and goes on air.
 
 Listeners tune in at `/stream.mp3` or on your branded player at `/listen`.
 
 ### Running on a server or in Docker
 
-On a headless machine, run `claude setup-token` once and pass the token as `CLAUDE_CODE_OAUTH_TOKEN`. Valhalla runs the CLI with that login.
+On a headless machine, sign in one of these ways:
+
+- **Claude Code:** run `claude setup-token` once and pass the token as `CLAUDE_CODE_OAUTH_TOKEN`.
+- **Codex:** run `codex login --device-auth`, or copy `~/.codex/auth.json` and mount it at `/root/.codex`.
+- **LM Studio:** point `LMSTUDIO_URL` at the server, e.g. `http://gpu-box:1234/v1`.
 
 ```bash
 docker build -t valhalla-radio .
@@ -47,7 +55,17 @@ docker run -d -p 8080:8080 -v valhalla-data:/data \
   valhalla-radio
 ```
 
-The image includes ffmpeg and the Claude Code CLI. The local voice is installed into `/data` from the studio.
+The image includes ffmpeg and the Claude Code CLI (add `--build-arg INSTALL_CODEX=1` for Codex). The local voice is installed into `/data` from the studio.
+
+### Choosing the AI
+
+**Settings → AI → AI provider:**
+
+- **Auto** uses the first ready provider in this order: Claude Code, Claude API, ChatGPT (Codex), OpenAI API, LM Studio.
+- Pick one to pin it. If it fails or hits a usage limit, the next ready provider takes over (you can turn that off).
+- **Claude:** defaults to **Claude Sonnet 5.5**. Opus, Haiku and Fable are selectable.
+- **Codex:** uses its default model unless you name one.
+- **LM Studio:** uses the first model it has loaded. Structured output uses JSON Schema, with a prompt-based fallback for servers that don't support it, and `<think>` blocks from reasoning models are stripped.
 
 ---
 
@@ -122,7 +140,7 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 | **Imaging** | Sweeper creator, imaging voice, music beds and auto-bed, and the imaging library (FX style, pin, auto badge, upload) |
 | **Spots** | Advertisers, spots, flights and affidavits |
 | **Station** | Name, logo, slogan, call letters, socials, market locations, time zones, and a live test of the keyless feeds |
-| **Stream / AI / Settings** | Stream links and Icecast relay; Claude Code status, connection test and the AI programmer; voice, broadcast standards, transitions, production and sources |
+| **Stream / AI / Settings** | Stream links and Icecast relay; status of every AI provider, connection test and the AI programmer; voice, broadcast standards, transitions, production and sources |
 
 The top bar shows the station clock with its zone, the top-of-hour countdown, the ON AIR tally, a program meter, and the AI, voice, bed and listener status. The layout works on phones.
 
@@ -139,7 +157,9 @@ Everything is set in the studio. Environment variables are optional:
 | `AUTOSTART=1` | Goes on air when the server boots. |
 | `VALHALLA_DATA_DIR` | Location of the database, caches, uploads and the local voice. |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code login for servers (from `claude setup-token`). |
-| `ANTHROPIC_API_KEY` | Optional API fallback for Claude. |
+| `ANTHROPIC_API_KEY` | Optional Claude API key. |
+| `OPENAI_API_KEY` | Optional OpenAI key (for the OpenAI API provider and OpenAI voices). |
+| `LMSTUDIO_URL` | LM Studio server, default `http://localhost:1234/v1`. |
 | `ELEVENLABS_API_KEY`, `OPENAI_API_KEY` | Optional premium voices. |
 | `FFMPEG_PATH` | If ffmpeg isn't on the PATH. |
 
@@ -157,7 +177,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 111 tests: DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 117 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```

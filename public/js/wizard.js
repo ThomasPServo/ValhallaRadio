@@ -46,10 +46,10 @@ function body() {
       </div>`;
     case 3: return `
       <h1>AI &amp; voice</h1>
-      <p class="sub">Claude programs the music and writes the DJ; a voice engine performs it. Neither needs an API key.</p>
+      <p class="sub">An AI programs the music and writes the DJ — Claude, ChatGPT or a local model in LM Studio — and a voice engine performs it. Neither needs an API key.</p>
       <div class="stack">
-        <div class="caprow"><span class="dot ${ai.provider ? 'ok' : 'bad'}"></span><b>${ai.provider === 'claude-code' ? 'Claude Code is signed in — your subscription runs the station' : ai.provider === 'api' ? 'Using your Anthropic API key' : 'Claude is not connected yet'}</b></div>
-        ${ai.provider ? '' : '<div class="small muted">Install Claude Code on this machine and sign in (run <code>claude</code> once; on a server, <code>claude setup-token</code>). The station still runs without it, using rotation rules and template copy.</div>'}
+        <div class="caprow"><span class="dot ${ai.provider ? 'ok' : 'bad'}"></span><b>${ai.provider ? `${esc(ai.label)} is connected (${esc(ai.model || '')}) — it runs the station` : 'No AI is connected yet'}</b></div>
+        ${ai.provider ? '' : '<div class="small muted">Any one of these works: sign in to <b>Claude Code</b> (<code>claude</code>) or <b>Codex</b> with your ChatGPT account (<code>codex login</code>), or start an <b>LM Studio</b> server with a model loaded. API keys work too (Settings). Without AI the station still runs, using rotation rules and template copy.</div>'}
         <div class="caprow"><span class="dot ${k.installed ? 'ok' : k.installing ? 'warn' : 'bad'}"></span><b>${k.installed ? 'Local voice installed' : k.installing ? 'Installing the local voice…' : 'Local voice not installed'}</b></div>
         ${k.installed ? '' : `<div class="small muted">A free neural voice (Kokoro) that runs on this machine — about 300 MB, one time.</div><div><button class="primary" id="wKokoro" ${k.installing ? 'disabled' : ''}>Install local voice</button> <span class="small muted" id="wKokoroLog"></span></div>`}
       </div>`;

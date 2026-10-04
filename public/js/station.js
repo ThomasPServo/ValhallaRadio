@@ -144,15 +144,19 @@ export const streaming = {
 
 function aiStatusHtml() {
   const a = state.B.capabilities.ai || {};
-  const cc = a.claudeCode || {};
+  const cc = a.claudeCode || {}; const cx = a.codex || {}; const oa = a.openai || {}; const lm = a.lmstudio || {};
   const row = (ok, label, detail = '') => `<div class="caprow"><span class="dot ${ok === true ? 'ok' : ok === false ? 'bad' : ''}"></span><b>${label}</b><span class="muted small">${detail}</span></div>`;
+  const stats = (x) => (x.calls ? ` · ${x.calls} request${x.calls === 1 ? '' : 's'}, ${x.failures || 0} failed${x.lastMs ? `, last ${(x.lastMs / 1000).toFixed(1)}s` : ''}` : '');
+  const errs = [cc.lastError && `Claude Code: ${cc.lastError}`, cx.lastError && `Codex: ${cx.lastError}`, oa.lastError && `OpenAI: ${oa.lastError}`, lm.lastError && `LM Studio: ${lm.lastError}`].filter(Boolean);
   return `
-    ${row(Boolean(a.provider), a.provider === 'claude-code' ? 'Using your Claude Code login' : a.provider === 'api' ? 'Using the Anthropic API key' : 'Claude is not connected', `model ${esc(a.model || '')}`)}
-    ${row(cc.found, cc.found ? `Claude Code ${esc(cc.version || '')}` : 'Claude Code CLI not found', cc.found ? (cc.loggedIn ? `signed in (${esc(cc.authMethod || '')})` : 'not signed in') : '')}
-    ${cc.calls ? row(cc.failures ? null : true, `${cc.calls} request${cc.calls === 1 ? '' : 's'} this session`, `${cc.failures || 0} failed${cc.lastMs ? ` · last took ${(cc.lastMs / 1000).toFixed(1)}s` : ''}`) : ''}
-    ${row(a.apiKey ? true : null, a.apiKey ? 'API key saved (fallback)' : 'No API key (optional)')}
-    ${cc.error ? `<div class="small" style="color:var(--yellow)">${esc(cc.error)}</div>` : ''}
-    ${cc.lastError ? `<div class="small" style="color:var(--red)">Last error: ${esc(cc.lastError)}</div>` : ''}`;
+    ${row(Boolean(a.provider), a.provider ? `Using ${esc(a.label)}` : 'No AI connected', a.provider ? `model ${esc(a.model || '')}${a.chain?.length > 1 ? ` · then ${a.chain.slice(1).map(esc).join(', ')}` : ''}` : '')}
+    <div class="sep"></div>
+    ${row(cc.found ? cc.loggedIn : null, cc.found ? `Claude Code ${esc(cc.version || '')}` : 'Claude Code not found', (cc.found ? (cc.loggedIn ? `signed in (${esc(cc.authMethod || '')})` : 'not signed in — run <code>claude</code>') : '') + stats(cc))}
+    ${row(cx.found ? cx.loggedIn : null, cx.found ? `Codex ${esc(cx.version || '')} (ChatGPT)` : 'Codex not found', (cx.found ? (cx.loggedIn ? `signed in (${esc(cx.method || '')})` : 'not signed in — run <code>codex login</code>') : '') + stats(cx))}
+    ${row(lm.reachable ? (lm.models?.length ? true : null) : null, lm.reachable ? `LM Studio at ${esc(lm.url)}` : 'LM Studio not running', (lm.reachable ? (lm.models?.length ? `${lm.models.length} model${lm.models.length === 1 ? '' : 's'} · using ${esc(lm.model || '')}` : 'no model loaded') : esc(lm.url || '')) + stats(lm))}
+    ${row(a.apiKey ? true : null, a.apiKey ? 'Anthropic API key saved' : 'No Anthropic API key (optional)')}
+    ${row(oa.apiKey ? true : null, oa.apiKey ? `OpenAI API key saved · ${esc(oa.model || '')}` : 'No OpenAI API key (optional)', stats(oa))}
+    ${errs.length ? `<div class="small" style="color:var(--red)">Last error — ${errs.map(esc).join('<br>')}</div>` : ''}`;
 }
 
 function designHtml(d) {
@@ -174,14 +178,14 @@ function designHtml(d) {
 export const ai = {
   render: () => `
     <h1>AI</h1>
-    <p class="sub">Claude is the music director, writes every DJ break and imaging line, and can design your whole station. It runs on your Claude Code subscription when this machine is signed in — no API key needed.</p>
+    <p class="sub">The AI is the music director, writes every DJ break and imaging line, and can design your whole station. It runs on a subscription you already have — Claude Code or ChatGPT (Codex) — or fully offline on a local model in LM Studio. No API key needed.</p>
     <div class="grid cols-2">
       <div class="card stack">
         <h2>Connection</h2>
         <div id="aiStatus">${aiStatusHtml()}</div>
-        <div class="row"><button data-action="aiRefresh">↻ Re-check</button><button data-action="aiTest">Test Claude</button></div>
+        <div class="row"><button data-action="aiRefresh">↻ Re-check</button><button data-action="aiTest">Test the AI</button></div>
         <div id="aiTestOut" class="small">${ui.aiTest}</div>
-        <details><summary class="small">Running on a server?</summary><div class="small muted" style="margin-top:6px">Install Claude Code on the server and run <code>claude setup-token</code> once (or set <code>CLAUDE_CODE_OAUTH_TOKEN</code>), and Valhalla uses that login. An Anthropic API key in Settings works too, and acts as a fallback.</div></details>
+        <details><summary class="small">Running on a server?</summary><div class="small muted" style="margin-top:6px">Claude Code: run <code>claude setup-token</code> once and set <code>CLAUDE_CODE_OAUTH_TOKEN</code>. Codex: run <code>codex login --device-auth</code> on the server (or copy <code>~/.codex/auth.json</code>). LM Studio: start its server (<code>lms server start</code>) and point Settings → AI at it, e.g. <code>http://gpu-box:1234/v1</code>. API keys work too and act as fallbacks.</div></details>
       </div>
       <div class="card stack">
         <h2>AI programmer</h2>
@@ -195,7 +199,7 @@ export const ai = {
     aiTest: (b) => run(b, async () => {
       const r = await api('POST', '/api/ai/test');
       state.B.capabilities.ai = r.status;
-      ui.aiTest = `✅ “${esc(r.text)}” <span class="muted">(${(r.ms / 1000).toFixed(1)}s via ${esc(r.status.provider)})</span>`;
+      ui.aiTest = `✅ “${esc(r.text)}” <span class="muted">(${(r.ms / 1000).toFixed(1)}s via ${esc(r.status.label || r.status.provider)})</span>`;
       $('#aiTestOut').innerHTML = ui.aiTest;
       $('#aiStatus').innerHTML = aiStatusHtml();
     }),
@@ -224,16 +228,27 @@ export const settings = {
     const s = state.B.settings; const c = state.B.capabilities;
     return `
     <h1>Settings</h1>
-    <p class="sub">Everything works with no API keys: Claude Code for AI, the local voice for speech, and keyless public data for weather and traffic. Keys are optional upgrades, stored only on the server.</p>
+    <p class="sub">Everything works with no API keys: Claude Code, ChatGPT (Codex) or LM Studio for AI, the local voice for speech, and keyless public data for weather and traffic. Keys are optional upgrades, stored only on the server.</p>
     <div class="grid cols-2" id="settingsForm">
       <div class="card stack">
-        <h2>🤖 Claude</h2>
-        ${select('claudeProvider', 'Use', s.claudeProvider, [['auto', 'Claude Code login if available, else API key'], ['claude-code', 'Claude Code only'], ['api', 'Anthropic API key only']])}
-        ${select('claudeModel', 'Model', s.claudeModel, [['claude-opus-5-5', 'Claude Opus 5.5 (default)'], ['claude-sonnet-5-5', 'Claude Sonnet 5.5 (faster)'], ['claude-haiku-4-5', 'Claude Haiku 4.5 (lightest)'], ['claude-fable-5-1', 'Claude Fable 5.1 (most capable)']])}
-        ${input('claudeCliPath', 'Claude Code path (blank = find it on PATH)', s.claudeCliPath, 'text', 'placeholder="claude"')}
-        ${input('anthropicApiKey', 'Anthropic API key (optional)', s.anthropicApiKey, 'password', 'autocomplete="off"')}
-        ${check('useClaudeForMusic', 'Claude picks the music for each hour', s.useClaudeForMusic)}
-        ${check('allowDiscovery', 'Let Claude add new music when a category runs thin', s.allowDiscovery)}
+        <h2>🤖 AI</h2>
+        ${select('claudeProvider', 'AI provider', s.claudeProvider, [['auto', 'Auto — the first one that is ready'], ['claude-code', 'Claude Code (your Claude subscription)'], ['api', 'Claude API (Anthropic key)'], ['codex', 'ChatGPT via Codex (your ChatGPT login)'], ['openai', 'OpenAI API (key)'], ['lmstudio', 'LM Studio (local model)']])}
+        ${check('aiFallback', 'If it fails or hits a usage limit, use the next AI that is ready', s.aiFallback !== false)}
+        <details open><summary class="small">Claude</summary><div class="stack" style="margin-top:8px">
+          ${select('claudeModel', 'Claude model', s.claudeModel, [['claude-sonnet-5-5', 'Claude Sonnet 5.5 (default)'], ['claude-opus-5-5', 'Claude Opus 5.5 (strongest writing)'], ['claude-haiku-4-5', 'Claude Haiku 4.5 (lightest)'], ['claude-fable-5-1', 'Claude Fable 5.1 (most capable)']])}
+          ${input('claudeCliPath', 'Claude Code path (blank = find it on PATH)', s.claudeCliPath, 'text', 'placeholder="claude"')}
+          ${input('anthropicApiKey', 'Anthropic API key (optional)', s.anthropicApiKey, 'password', 'autocomplete="off"')}
+        </div></details>
+        <details><summary class="small">ChatGPT (Codex) &amp; OpenAI</summary><div class="stack" style="margin-top:8px">
+          <div class="grid cols-2">${input('codexModel', 'Codex model (blank = Codex default)', s.codexModel, 'text', 'placeholder="default"')}${input('codexCliPath', 'Codex path (blank = PATH)', s.codexCliPath, 'text', 'placeholder="codex"')}</div>
+          ${input('openaiModel', 'OpenAI API model (uses the OpenAI key under Voice)', s.openaiModel, 'text', 'placeholder="gpt-5-mini"')}
+        </div></details>
+        <details ${s.claudeProvider === 'lmstudio' ? 'open' : ''}><summary class="small">LM Studio (local)</summary><div class="stack" style="margin-top:8px">
+          <div class="grid cols-2">${input('lmstudioUrl', 'Server URL', s.lmstudioUrl, 'text', 'placeholder="http://localhost:1234/v1"')}<div><label>Model</label><select data-k="lmstudioModel"><option value="">First loaded model</option>${(state.B.capabilities.ai?.lmstudio?.models || []).map((m) => opt(m, m, s.lmstudioModel)).join('')}${s.lmstudioModel && !(state.B.capabilities.ai?.lmstudio?.models || []).includes(s.lmstudioModel) ? opt(s.lmstudioModel, s.lmstudioModel, s.lmstudioModel) : ''}</select></div></div>
+          <p class="hint" style="margin:0">Load a capable instruct model (8B+ recommended) and start the server in LM Studio's Developer tab.</p>
+        </div></details>
+        ${check('useClaudeForMusic', 'The AI picks the music for each hour', s.useClaudeForMusic)}
+        ${check('allowDiscovery', 'Let the AI add new music when a category runs thin', s.allowDiscovery)}
       </div>
       <div class="card stack">
         <h2>🎙️ Voice</h2>

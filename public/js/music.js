@@ -123,7 +123,7 @@ const TABBODY = {
         <div><label>How many</label><input id="discCount" type="number" value="12" min="1" max="40"></div>
       </div>
       <div><label>Direction (optional)</label><input id="discGuide" placeholder="e.g. 90s alternative hits, female vocalists, songs for a summer weekend"></div>
-      <div class="row"><button class="primary" data-action="discover" ${state.B.capabilities.claude ? '' : 'disabled'}>Discover music</button>${state.B.capabilities.claude ? '' : '<span class="small muted">Connect Claude Code or add an API key in Settings first.</span>'}</div>
+      <div class="row"><button class="primary" data-action="discover" ${state.B.capabilities.claude ? '' : 'disabled'}>Discover music</button>${state.B.capabilities.claude ? '' : '<span class="small muted">Connect an AI in Settings first (Claude Code, Codex, LM Studio or an API key).</span>'}</div>
       <div id="discResults"></div>
     </div>`,
   rules: () => {

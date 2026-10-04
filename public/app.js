@@ -82,8 +82,8 @@ function pills() {
   const c = B.capabilities;
   const ai = c.ai || {};
   const set = (id, cls, title) => { const el = $(`#${id} .dot`); el.className = `dot ${cls}`; $(`#${id}`).title = title; };
-  set('pillAi', ai.provider ? 'ok' : 'bad', ai.provider === 'claude-code' ? `Claude Code (${ai.claudeCode?.version || ''}) — your subscription` : ai.provider === 'api' ? 'Anthropic API key' : 'Claude not connected — Settings');
-  $('#pillAi b').textContent = ai.provider === 'claude-code' ? 'Claude Code' : ai.provider === 'api' ? 'Claude API' : 'AI off';
+  set('pillAi', ai.provider ? 'ok' : 'bad', ai.provider ? `AI: ${ai.label} · ${ai.model || ''}${ai.chain?.length > 1 ? ` (fallback: ${ai.chain.slice(1).join(', ')})` : ''}` : 'No AI connected — Settings → AI');
+  $('#pillAi b').textContent = ai.label || 'AI off';
   const v = c.voice || {};
   set('pillVoice', c.tts ? 'ok' : v.kokoro?.installing ? 'warn' : 'bad', c.tts ? `Voice: ${v.provider}` : 'No voice engine — Settings → Voice');
   $('#pillVoice b').textContent = c.tts ? ({ kokoro: 'Local voice', elevenlabs: 'ElevenLabs', openai: 'OpenAI voice' }[v.provider] || v.provider) : 'No voice';

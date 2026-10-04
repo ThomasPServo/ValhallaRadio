@@ -36,11 +36,19 @@ export function defaultDb() {
       },
     },
     settings: {
-      // AI: 'auto' uses your Claude Code login when available, otherwise an API key
+      // AI: 'auto' | 'claude-code' | 'api' (Anthropic key) | 'codex' (ChatGPT login) | 'openai' (key) | 'lmstudio' (local)
       claudeProvider: 'auto',
       claudeCliPath: '',
       anthropicApiKey: '',
-      claudeModel: 'claude-opus-5-5',
+      claudeModel: 'claude-sonnet-5-5',
+      aiFallback: true, // when the chosen AI fails or hits a limit, use the next one that's ready
+      // ChatGPT via the Codex CLI (signed in with a ChatGPT account); blank model = Codex's default
+      codexCliPath: '',
+      codexModel: '',
+      // OpenAI API (uses openaiApiKey below) and local LM Studio server
+      openaiModel: '',
+      lmstudioUrl: 'http://localhost:1234/v1',
+      lmstudioModel: '', // blank = the first model LM Studio has loaded
       useClaudeForMusic: true,
       cleanOnly: true, // broadcast-safe: explicit songs are swapped for clean radio edits or never aired
       allowDiscovery: true, // let Claude pull new music from monochrome when the library runs thin
@@ -225,6 +233,9 @@ class Store {
     // Environment variables seed secrets without having to type them into the UI.
     const s = this.data.settings;
     if (!s.anthropicApiKey && process.env.ANTHROPIC_API_KEY) s.anthropicApiKey = process.env.ANTHROPIC_API_KEY;
+    if (process.env.LMSTUDIO_URL) s.lmstudioUrl = process.env.LMSTUDIO_URL;
+    // Sonnet is the default Claude model now; stations still on the old default move over once
+    if (!s.aiDefaultsV2) { if (s.claudeModel === 'claude-opus-5-5') s.claudeModel = 'claude-sonnet-5-5'; s.aiDefaultsV2 = true; }
     if (!s.elevenLabsApiKey && process.env.ELEVENLABS_API_KEY) s.elevenLabsApiKey = process.env.ELEVENLABS_API_KEY;
     if (!s.openaiApiKey && process.env.OPENAI_API_KEY) s.openaiApiKey = process.env.OPENAI_API_KEY;
     delete s.tomtomApiKey; // traffic is keyless now
