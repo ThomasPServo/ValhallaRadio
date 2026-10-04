@@ -14,7 +14,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { MUSIC_CACHE_DIR } from '../config.js';
 import { store } from '../store.js';
-import { getFetch, activeFetch, fetcherStatus, BACKGROUND } from './fetcher.js';
+import { getFetch, activeFetch, fetcherStatus, BACKGROUND, CHUNK } from './fetcher.js';
+import * as arcod from './arcod.js';
+import { findTrack } from '../scheduler/library.js';
 
 const UA = 'ValhallaRadio/0.1 (+radio automation)';
 
@@ -73,14 +75,14 @@ export function normalizeTrack(item, extra = {}) {
   };
 }
 
-export async function searchTracks(query, limit = 20) {
+async function monoSearchTracks(query, limit = 20) {
   const q = String(query || '').trim();
   if (!q) return [];
   const data = await getJson(`${base()}/search/tracks?q=${encodeURIComponent(q)}&limit=${limit}`);
   return (data.tracks || []).map((t) => normalizeTrack(t)).filter((t) => t && t.playable);
 }
 
-export async function search(query) {
+async function monoSearch(query) {
   const q = String(query || '').trim();
   if (!q) return { tracks: [], releases: [], artists: [] };
   const data = await getJson(`${base()}/search?q=${encodeURIComponent(q)}`);
@@ -102,7 +104,7 @@ export async function search(query) {
   };
 }
 
-export async function getRelease(id) {
+async function monoGetRelease(id) {
   const data = await getJson(`${base()}/releases/${encodeURIComponent(id)}`);
   const artist = (data.artists || []).map((a) => a.displayName || a.name).join(', ');
   const tracks = (data.tracks || [])
@@ -119,7 +121,7 @@ export async function getRelease(id) {
   };
 }
 
-export async function getArtist(id) {
+async function monoGetArtist(id) {
   const data = await getJson(`${base()}/artists/${encodeURIComponent(id)}`);
   const name = data.displayName || data.name;
   return {
@@ -161,6 +163,17 @@ export function matchScore(want, got) {
   return score;
 }
 
+// ------------------------------------------------------------------ the music source (arcod or monochrome)
+
+/** Which catalogue new music comes from: arcod (Qobuz, fast, MP3 320 or FLAC) or monochrome (TIDAL, lossless, slow). */
+export const musicSource = () => (store.settings.musicSource === 'monochrome' ? 'monochrome' : 'arcod');
+const fromArcod = (id) => arcod.isArcodId(id);
+
+export const searchTracks = (q, limit) => (musicSource() === 'arcod' ? arcod.searchTracks(q, limit) : monoSearchTracks(q, limit));
+export const search = (q) => (musicSource() === 'arcod' ? arcod.search(q) : monoSearch(q));
+export const getRelease = (id) => (fromArcod(id) ? arcod.getRelease(id) : monoGetRelease(id));
+export const getArtist = (id) => (fromArcod(id) ? arcod.getArtist(id) : monoGetArtist(id));
+
 export async function resolveSuggestion({ artist, title }) {
   const results = await searchTracks(`${artist} ${title}`, 8);
   let best = null;
@@ -189,10 +202,30 @@ export function cachedPath(trackId) {
 export function fetchTrack(trackId, { priority = 1000 } = {}) {
   const final = cachedPath(trackId);
   if (fs.existsSync(final) && fs.statSync(final).size > 10000) return null;
-  const f = getFetch(String(trackId), streamUrl(trackId), final, { priority });
+  const id = String(trackId);
+  let f;
+  if (fromArcod(id)) {
+    f = getFetch(id, arcodResolver(id), final, { priority, chunkSize: ARCOD_CHUNK, group: 'arcod' });
+  } else if (musicSource() === 'arcod') {
+    // a monochrome song in the library: fetch the same recording from arcod (fast) when it has it
+    f = getFetch(id, async () => {
+      const t = findTrack(id) || { id };
+      if (t.arcodId === undefined && t.title) {
+        t.arcodId = (await arcod.findEquivalent(t, matchScore).catch(() => null))?.id || null;
+        store.save();
+      }
+      if (t.arcodId) return arcodResolver(t.arcodId)();
+      return { url: streamUrl(id), chunkSize: CHUNK, tag: null };
+    }, final, { priority });
+  } else {
+    f = getFetch(id, streamUrl(id), final, { priority });
+  }
   if (!f._pruneHooked) { f._pruneHooked = true; f.done.then(() => pruneCache(), () => {}); }
   return f;
 }
+
+const ARCOD_CHUNK = 8 * 1024 * 1024; // arcod sends megabytes per second: a song in one or two requests
+const arcodResolver = (arcodId) => async () => ({ url: await arcod.playUrl(arcodId), chunkSize: ARCOD_CHUNK, tag: `arcod:${arcod.quality()}`, group: 'arcod' });
 
 /** Download a track to the local cache; resolves with its path. */
 export async function download(trackId, { priority = 500 } = {}) {

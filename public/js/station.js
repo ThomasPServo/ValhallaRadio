@@ -287,9 +287,15 @@ export const settings = {
         ${check('production.infoBeds', 'News, weather and traffic get their own sounder and bed', s.production?.infoBeds !== false)}
         <p class="hint" style="margin:0">Auto-bed under DJ talk and the sweeper creator live on the Imaging page.</p>
         <h2 style="margin-top:8px">📡 Sources &amp; data</h2>
+        <div class="grid cols-2">
+          ${select('musicSource', 'Music source', s.musicSource || 'arcod', [['arcod', 'arcod: Qobuz catalogue, fast (recommended)'], ['monochrome', 'monochrome: TIDAL catalogue, lossless, slow']])}
+          ${select('arcodQuality', 'arcod quality', String(s.arcodQuality || '5'), [['5', 'MP3 320 kbps (about 10 MB a song)'], ['6', 'FLAC 16-bit/44.1 kHz (about 35 MB)'], ['7', 'FLAC 24-bit/96 kHz'], ['27', 'FLAC 24-bit/192 kHz (largest)']])}
+        </div>
+        <p class="hint" style="margin:0">arcod delivers a whole song in seconds; the station streams 128–192 kbps MP3, so MP3 320 sounds the same on air and fits about four times as many songs in the cache. Songs already in your library from monochrome are fetched from arcod too (matched by ISRC) when it has them.</p>
+        <div class="grid cols-2">${input('arcodBase', 'arcod address', s.arcodBase)}${input('arcodConnections', 'Connections to arcod', s.arcodConnections ?? 2, 'number', 'min="1" max="6"')}</div>
         <div class="grid cols-2">${input('monochromeConnections', 'Parallel connections to monochrome', s.monochromeConnections ?? 6, 'number', 'min="1" max="12"')}${input('prefetchSongs', 'Songs fetched ahead of air', s.prefetchSongs ?? 10, 'number', 'min="0" max="40"')}</div>
         ${check('warmCache', 'Fill the cache with the whole library in the background (power rotation first)', s.warmCache !== false)}
-        <p class="hint" style="margin:0">monochrome sends each connection slowly and cuts it after ~30 seconds, so songs arrive in small chunks over several connections, starting well before they air. More than 8 connections tends to get refused. Every song in the cache airs instantly, so a bigger cache means less waiting.</p>
+        <p class="hint" style="margin:0">For monochrome: it sends each connection slowly and cuts it after ~30 seconds, so songs arrive in small chunks over several connections, starting well before they air. More than 8 connections tends to get refused. Every song in the cache airs instantly, so a bigger cache means less waiting.</p>
         <div class="grid cols-2">${input('monochromeBase', 'monochrome API', s.monochromeBase)}${input('musicCacheMaxMb', 'Download cache limit (MB)', s.musicCacheMaxMb, 'number')}</div>
         <div><label>Extra news RSS feeds (one per line)</label><textarea data-k="newsFeeds" data-list="1" rows="2">${esc((s.newsFeeds || []).join('\n'))}</textarea></div>
         <div><label>Extra traffic feeds — RSS or WZDx GeoJSON, no keys (one per line)</label><textarea data-k="trafficFeeds" data-list="1" rows="2">${esc((s.trafficFeeds || []).map((f) => (typeof f === 'string' ? f : f.url)).join('\n'))}</textarea></div>

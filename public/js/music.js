@@ -1,4 +1,4 @@
-// Program log and music library (search, monochrome import, charts, discovery, song info, categories,
+// Program log and music library (catalogue search and import, charts, discovery, song info, categories,
 // clean-version sweep and the waveform marker editor).
 
 import { $, $$, esc, fmtDur, state, api, run, toast, bus, stationTime, catChip, catOptions, opt, input, collect, rowsToObjects, save, play, modal, closeModal } from './core.js';
@@ -41,7 +41,7 @@ export const log = {
 };
 
 // ------------------------------------------------------------------ library
-const TABS = [['library', '📚 Library'], ['charts', '📈 Charts'], ['search', '🔎 Add from monochrome'], ['discover', '🧭 Discover'], ['rules', '⚖️ Categories & rotation']];
+const TABS = [['library', '📚 Library'], ['charts', '📈 Charts'], ['search', '🔎 Add music'], ['discover', '🧭 Discover'], ['rules', '⚖️ Categories & rotation']];
 
 function libraryTab() {
   const B = state.B;
@@ -92,7 +92,7 @@ async function loadLibrary() {
   ui.lib = items;
   const rows = $('#libRows');
   if (!rows) return;
-  rows.innerHTML = items.length ? items.map(libRow).join('') : '<tr><td colspan="9" class="empty">No songs yet — add some from monochrome, or let Claude discover music.</td></tr>';
+  rows.innerHTML = items.length ? items.map(libRow).join('') : '<tr><td colspan="9" class="empty">No songs yet — add some from the catalogue, or let the station discover music.</td></tr>';
   $('#libCount').textContent = `${items.length} song${items.length === 1 ? '' : 's'}`;
 }
 
@@ -187,13 +187,13 @@ const TABBODY = {
   search: () => `
     <div class="card">
       <div class="row" style="margin-bottom:12px">
-        <input id="monoQ" placeholder="Search monochrome: artist, song or album" style="max-width:420px">
+        <input id="monoQ" placeholder="Search the catalogue: artist, song or album" style="max-width:420px">
         <button class="primary" data-action="monoSearch">Search</button>
         <span class="spacer"></span>
         <label style="margin:0">Add to</label><select id="addCat" style="max-width:220px">${catOptions('N')}</select>
       </div>
       ${state.B.settings.cleanOnly ? '<p class="hint" style="margin-top:-4px">Clean versions only: explicit picks are swapped for their clean radio edits automatically (or skipped when none exists).</p>' : ''}
-      <div id="monoResults" class="grid cols-3">${ui.results || '<div class="muted">Search the monochrome catalogue to add songs, an artist\'s top tracks or a whole album.</div>'}</div>
+      <div id="monoResults" class="grid cols-3">${ui.results || `<div class="muted">Search the ${state.B.settings.musicSource === 'monochrome' ? 'monochrome (TIDAL)' : 'arcod (Qobuz)'} catalogue to add songs, an artist's top tracks or a whole album.</div>`}</div>
     </div>`,
   discover: () => `
     <div class="card stack" style="max-width:760px">
@@ -232,7 +232,7 @@ const TABBODY = {
 export const library = {
   render: () => `
     <h1>Music library</h1>
-    <p class="sub">${state.B.libraryCount} songs, from monochrome in lossless quality, fetched into the cache ahead of air. Intros, endings and tempo are analysed as songs play.</p>
+    <p class="sub">${state.B.libraryCount} songs from ${state.B.settings.musicSource === 'monochrome' ? 'monochrome (TIDAL, lossless)' : `arcod (Qobuz, ${({ 5: 'MP3 320 kbps', 6: 'FLAC', 7: 'hi-res FLAC', 27: 'hi-res FLAC' })[state.B.settings.arcodQuality || 5] || 'MP3 320 kbps'})`}, fetched into the cache ahead of air. Intros, endings and tempo are analysed as songs play.</p>
     <div class="tabs">${TABS.map(([k, l]) => `<button class="${ui.tab === k ? 'active' : ''}" data-action="tab" data-tab="${k}">${l}</button>`).join('')}</div>
     <div id="libBody">${TABBODY[ui.tab]()}</div>`,
   mount() {
@@ -301,7 +301,7 @@ export const library = {
       state.B.libraryCount += r.added.length;
       const by = Object.entries(r.by || {}).filter(([, n]) => n).map(([k, n]) => `${n} from ${{ charts: 'charts', ai: 'the AI', catalog: 'related artists' }[k] || k}`).join(', ');
       $('#discResults').innerHTML = `<h3>Added ${r.added.length}${by ? ` <span class="small muted">(${by})</span>` : ''}</h3>${r.added.map((t) => `<div class="small">✅ ${esc(t.artist)} — ${esc(t.title)} <span class="muted">${esc(t.note || '')}</span></div>`).join('')}
-        ${r.missed?.length ? `<h3 style="margin-top:10px">Not found on monochrome</h3>${r.missed.map((m) => `<div class="small muted">✗ ${esc(m)}</div>`).join('')}` : ''}`;
+        ${r.missed?.length ? `<h3 style="margin-top:10px">Not found in the catalogue</h3>${r.missed.map((m) => `<div class="small muted">✗ ${esc(m)}</div>`).join('')}` : ''}`;
     }),
     addCat: () => $('#catRows').insertAdjacentHTML('beforeend', '<tr><td><input data-f="id" style="width:50px"></td><td><input data-f="name"></td><td><input data-f="color" type="color" value="#64748b" style="width:44px;padding:2px"></td><td><input data-f="minRestHours" type="number" step="0.5" value="6" style="width:80px"></td><td><button class="icon danger" data-action="delRow">✕</button></td></tr>'),
     saveCats: () => save('categories', rowsToObjects('#catRows').filter((c) => c.id).map(({ id, name, color, minRestHours }) => ({ id: id.toUpperCase(), name, color, minRestHours }))),

@@ -10,7 +10,7 @@
 // analysis needs no extra network traffic.
 
 import { spawn } from 'node:child_process';
-import { EventEmitter, once } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { FFMPEG } from '../config.js';
 import { kWeighting } from './dsp.js';
 import { gatedLoudness } from './analysis.js';
@@ -77,6 +77,15 @@ export class StreamDecoder extends EventEmitter {
     return this;
   }
 
+  /** Wait until ffmpeg's stdin can take more (or ffmpeg is gone), leaving no listeners behind. */
+  _drained() {
+    return new Promise((resolve) => {
+      const done = () => { this.proc.stdin.off('drain', done); this.proc.off('close', done); resolve(); };
+      this.proc.stdin.once('drain', done);
+      this.proc.once('close', done);
+    });
+  }
+
   /** Feed ffmpeg from a chunked fetch as its bytes arrive. */
   async _pumpSource() {
     try {
@@ -84,7 +93,7 @@ export class StreamDecoder extends EventEmitter {
         if (this.closed) return;
         this.totalBytes = this.source.total;
         this.bytes += chunk.length;
-        if (!this.proc.stdin.write(chunk)) await Promise.race([once(this.proc.stdin, 'drain'), once(this.proc, 'close')]);
+        if (!this.proc.stdin.write(chunk)) await this._drained();
       }
       if (!this.closed) this.proc.stdin.end();
     } catch (err) {
@@ -122,7 +131,7 @@ export class StreamDecoder extends EventEmitter {
           attempt = 0;
           if (!this.proc.stdin.write(chunk)) {
             waiting = true;
-            await Promise.race([once(this.proc.stdin, 'drain'), once(this.proc, 'close')]);
+            await this._drained();
             waiting = false;
             lastByte = Date.now();
           }

@@ -10,7 +10,7 @@ Radio automation for the AI era: a complete station in a box. Name your station,
 |---|---|
 | AI | A subscription you already have: **Claude Code** (`claude`, Claude Sonnet 5.5 by default) or **ChatGPT via Codex** (`codex`). Or fully offline on a local model in **LM Studio**. Anthropic and OpenAI API keys are optional. |
 | Voice | A free **local neural voice** (Kokoro), installed on demand from the studio. ElevenLabs/OpenAI are optional. |
-| Music | **[monochrome](https://github.com/monochrome-music/monochrome)** (`tracks.monochrome.st`), lossless. Songs are fetched into a local cache ahead of air in parallel chunks, and can start playing before they finish arriving. |
+| Music | **arcod** (`player.arcod.xyz`, the Qobuz catalogue) by default: 320 kbps MP3 or FLAC, a whole song in seconds, no account. **[monochrome](https://github.com/monochrome-music/monochrome)** (`tracks.monochrome.st`, TIDAL, lossless) is the alternative. Songs are fetched into a local cache ahead of air. |
 | Weather | **National Weather Service** (US, public domain) and **MET Norway** (worldwide). Sunrise and sunset are computed locally. |
 | Traffic | **State DOT work-zone feeds** (USDOT WZDx registry), **CHP** and **city dispatch** open data, and local headlines. |
 | News | Local and national **RSS**. |
@@ -114,7 +114,7 @@ Each format follows its own charts (country follows iTunes Country and the Hot 1
 **Finding new music** (Settings → AI → *How new music is found*) when a category runs thin:
 
 - **Charts:** chart hits the library doesn't have yet. For current categories that means this week's charts: top 15 for power, top 50 for current, the newest arrivals for new music. For gold and recurrent categories it means Hot 100 hits from the category's era. When a chart mixes styles, an AI (or, without one, each song's iTunes genre) keeps only the songs that fit the format.
-- **AI suggestions:** the AI suggests songs, and each one is checked against the monochrome catalog.
+- **AI suggestions:** the AI suggests songs, and each one is checked against the catalog.
 - **Catalog only:** Valhalla finds artists related to the ones the category already plays (from Deezer's listener graph), pulls their real catalog songs and keeps only songs in the category's era. An AI, if one is connected, then ranks those candidates; without one, Valhalla ranks them by popularity. Either way, the AI never has to recall a song from memory.
 - **Auto** (the default) tries charts first, then AI suggestions (with Claude or ChatGPT, not local models), then related artists, until the category is full.
 
@@ -142,9 +142,11 @@ Claude writes in the persona's voice and is never allowed to invent facts. Numbe
 - **Auto-bed:** when there's nothing to talk over (after a stopset, a cold ending, or back-to-back reports), a music bed comes up under the DJ and hands over to the next intro. Beds are synthesized loops (Pulse, Warm, Drive and Chill, matched to your format) or your own uploads, crossfaded into seamless loops.
 - Spots butt tightly, and imaging overlaps song intros up to the post.
 
-### Getting songs from monochrome
+### Getting songs
 
-monochrome's stream origin is slow per connection (about 10–20 KB/s) and cuts every connection after about 30 seconds, which on some servers is only 260 KB of a 30 MB lossless file. Lossless FLAC needs 100–140 KB/s to play in real time, so one connection can never keep up. Valhalla fetches songs like a download manager:
+**arcod (default).** Music comes from arcod, a free front end to the Qobuz catalogue that needs no account. Its signed play URLs deliver a whole song in one or two requests, at several megabytes per second; in testing a 12 MB song arrived in under 2 seconds. *Settings → Sources* picks the quality: MP3 320 kbps by default (about 10 MB a song), or FLAC at CD or hi-res quality. The station broadcasts 128–192 kbps MP3, so MP3 320 sounds the same on air and fits about four times as many songs in the cache. Valhalla keeps to two connections to arcod, waits when it asks (429), and gets a fresh signed URL when one expires. Songs already in your library from monochrome are fetched from arcod too, matched by ISRC (never an explicit version for a clean one), and fall back to monochrome if arcod doesn't have them.
+
+**monochrome.** monochrome's stream origin is slow per connection (about 10–20 KB/s) and cuts every connection after about 30 seconds, which on some servers is only 260 KB of a 30 MB lossless file. Lossless FLAC needs 100–140 KB/s to play in real time, so one connection can never keep up. Valhalla fetches songs like a download manager:
 
 - **Small chunks:** every song comes in 256 KB Range chunks over a shared pool of parallel connections. Each chunk finishes well inside the 30-second cut-off, and a cut chunk resumes from its last byte.
 - **Adaptive connection count:** the pool adds connections while the origin keeps up, halves them on a 429 and eases off by one on a 52x (bursts of 16 or more get refused). In testing, 6 connections sustained about 80–100 KB/s. The default is 6, and you can change it in *Settings → Sources*.
@@ -190,7 +192,7 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 |---|---|
 | **Studio** | Deck with countdowns (to vocals, talk left, remaining), a live waveform with vocal and mix markers, the multitrack segue timeline with gain automation, a back-timed drag-and-drop log, hour clock, hot carts, insert break, live read, program meters with gain reduction |
 | **Log** | Every hour with the music director's reasons; regenerate any hour |
-| **Library** | Search/filter, explicit and clean badges, chart positions, intro, ending and BPM, the waveform marker editor, song info (facts, charts, story), monochrome import (songs, albums, artist top tracks), charts (any chart, or any Hot 100 week since 1958, with one-click adds), discovery from charts, the AI and related artists, categories and rotation rules |
+| **Library** | Search/filter, explicit and clean badges, chart positions, intro, ending and BPM, the waveform marker editor, song info (facts, charts, story), catalogue import (songs, albums, artist top tracks), charts (any chart, or any Hot 100 week since 1958, with one-click adds), discovery from charts, the AI and related artists, categories and rotation rules |
 | **Clocks** | Hour-clock editor with a pie view and the paintable weekly grid |
 | **Engineering** | Presets, live processor controls, bypass, LUFS readouts and history, true peak, phase correlation, ⅓-octave spectrum, goniometer, per-band gain reduction, streaming deck buffers |
 | **DJs** | Dayparts and personas (style, voice, speed), with a sample break written and voiced on demand |

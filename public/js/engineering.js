@@ -119,7 +119,7 @@ function decks() {
   const fe = $('#fetcher');
   if (fe && fx) {
     const kb = (n) => `${Math.round(n / 1024)} KB/s`;
-    fe.innerHTML = `<div class="small" style="margin-top:8px"><b>Fetching from monochrome</b> · ${fx.connections}/${fx.limit} connections (max ${fx.max}) · ${kb(fx.rate)}${fx.throttled ? ` · origin refused ${fx.throttled}×, eased off` : ''}</div>
+    fe.innerHTML = `<div class="small" style="margin-top:8px"><b>Fetching songs</b> · ${fx.connections}/${fx.limit} connections (max ${fx.max}) · ${kb(fx.rate)}${fx.throttled ? ` · origin refused ${fx.throttled}×, eased off` : ''}</div>
       ${fx.songs.slice(0, 8).map((f) => { const t = state.LOG.flatMap((l) => l.items).find((i) => String(i.trackId) === f.key); const pct = f.total ? Math.round((100 * f.received) / f.total) : 0; return `<div class="deckrow"><div style="min-width:0" class="small">${esc(t ? `${t.artist} - ${t.title}` : `track ${f.key}`)}<div class="muted">${f.total ? `${(f.received / 1048576).toFixed(1)}/${(f.total / 1048576).toFixed(1)} MB` : 'starting'}${f.rate ? ` · ${kb(f.rate)}` : ''}${f.eta != null && f.total ? ` · ~${Math.ceil(f.eta / 60)} min left` : ''}</div></div><div class="bufbar"><i style="width:${pct}%"></i></div><span class="num small">${pct}%</span><span class="num small muted">#${f.priority}</span></div>`; }).join('') || '<div class="small muted">All upcoming songs are in the cache.</div>'}`;
   }
   const S = state.S; const B = state.B;

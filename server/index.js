@@ -254,15 +254,24 @@ app.get('/api/monochrome/release/:id', wrap(async (req, res) => res.json(await m
 // Song previews in the studio: from the cache, or from a chunked fetch as it fills (one direct connection to the origin is too slow for FLAC)
 app.get('/api/monochrome/stream/:id', wrap(async (req, res) => {
   const id = String(req.params.id).replace(/[^\w-]/g, '');
-  if (mono.isCached(id)) return res.type('audio/flac').sendFile(mono.cachedPath(id));
+  const typeOf = (head) => (head.subarray(0, 4).toString('latin1') === 'fLaC' ? 'audio/flac' : 'audio/mpeg'); // FLAC (monochrome, arcod lossless) or MP3 (arcod 320)
+  if (mono.isCached(id)) {
+    const fd = fs.openSync(mono.cachedPath(id), 'r'); const head = Buffer.alloc(4); fs.readSync(fd, head, 0, 4, 0); fs.closeSync(fd);
+    return res.type(typeOf(head)).sendFile(mono.cachedPath(id));
+  }
   const f = mono.fetchTrack(id, { priority: 100 });
-  res.type('audio/flac');
   let gone = false;
   req.on('close', () => { gone = true; });
   try {
     for await (const chunk of f.read(0)) {
       if (gone) break;
-      if (!res.write(chunk)) await new Promise((r) => { res.once('drain', r); res.once('close', r); });
+      if (!res.headersSent) res.type(typeOf(chunk));
+      if (!res.write(chunk)) {
+        await new Promise((r) => {
+          const done = () => { res.off('drain', done); res.off('close', done); r(); };
+          res.once('drain', done); res.once('close', done);
+        });
+      }
     }
     res.end();
   } catch { res.destroy(); }

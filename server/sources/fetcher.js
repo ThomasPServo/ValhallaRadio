@@ -47,6 +47,9 @@ export const pool = {
   },
 };
 const fetches = new Map(); // key -> TrackFetch
+/** Hosts that get fewer connections than the pool allows (fast services we don't need to hammer). */
+export const groupLimits = { arcod: () => Math.max(1, Math.min(6, Number(store.settings.arcodConnections) || 2)) };
+const groupActive = {};
 let timer = null;
 
 function schedule() {
@@ -56,6 +59,7 @@ function schedule() {
   const live = [...fetches.values()].filter((f) => !f.finished).sort((a, b) => a.priority - b.priority);
   for (const f of live) {
     while (pool.active < Math.floor(pool.limit)) {
+      if (f.group && groupLimits[f.group] && (groupActive[f.group] || 0) >= groupLimits[f.group]()) break;
       const c = f.nextChunk();
       if (!c) break;
       runChunk(f, c);
@@ -81,10 +85,19 @@ const poolRate = rateTracker();
 // ------------------------------------------------------------------ one song
 
 export class TrackFetch extends EventEmitter {
-  constructor(key, url, file, { priority = 1000 } = {}) {
+  /**
+   * @param {string | (() => Promise<string | {url: string, chunkSize?: number}>)} url the audio URL, or a
+   *   resolver for short-lived signed URLs (called lazily, and again if the URL expires mid-fetch)
+   */
+  constructor(key, url, file, { priority = 1000, chunkSize = CHUNK, group = null } = {}) {
     super();
     this.setMaxListeners(50);
-    this.key = key; this.url = url; this.file = file;
+    this.key = key; this.file = file;
+    this.source = url;
+    this.url = typeof url === 'string' ? url : null;
+    this.urlRefreshes = 0;
+    this.chunkSize = chunkSize;
+    this.group = group; // a host with its own connection limit (see groupLimits)
     this.part = `${file}.part`; this.metaFile = `${file}.part.json`;
     this.priority = priority;
     this.total = null; this.chunks = null;
@@ -103,6 +116,7 @@ export class TrackFetch extends EventEmitter {
     try {
       const m = JSON.parse(fs.readFileSync(this.metaFile, 'utf8'));
       if (m.total && m.chunk > 0 && fs.existsSync(this.part) && fs.statSync(this.part).size === m.total) {
+        this.restoredTag = m.tag ?? null;
         this.initChunks(m.total);
         // progress saved with any chunk size: each saved chunk is a filled prefix [start, start + got)
         for (const [i, got] of m.got.entries()) {
@@ -115,14 +129,15 @@ export class TrackFetch extends EventEmitter {
 
   initChunks(total) {
     this.total = total;
-    const n = Math.ceil(total / CHUNK);
-    this.chunks = Array.from({ length: n }, (_, i) => ({ start: i * CHUNK, end: Math.min(total, (i + 1) * CHUNK) - 1, got: 0, busy: false }));
+    const size = this.chunkSize;
+    const n = Math.ceil(total / size);
+    this.chunks = Array.from({ length: n }, (_, i) => ({ start: i * size, end: Math.min(total, (i + 1) * size) - 1, got: 0, busy: false }));
   }
 
   /** Lowest missing chunk not already in flight (in order, so playback can start early). Before the size is known, only one probe. */
   nextChunk() {
     if (this.finished) return null;
-    if (!this.chunks) return this.probing ? null : (this.probing = { start: 0, end: CHUNK - 1, got: 0, busy: false, probe: true });
+    if (!this.chunks) return this.probing ? null : (this.probing = { start: 0, end: this.chunkSize - 1, got: 0, busy: false, probe: true });
     return this.chunks.find((c) => !c.busy && c.got < c.end - c.start + 1) || null;
   }
 
@@ -148,6 +163,32 @@ export class TrackFetch extends EventEmitter {
     return (this.total - this.received()) / r;
   }
 
+  /** The URL to fetch from; resolvers are asked once, and again after the URL expires. */
+  async resolve(force = false) {
+    if (typeof this.source !== 'function') return this.url;
+    if (this.url && !force) return this.url;
+    if (!this._resolving) {
+      this._resolving = (async () => {
+        const r = await this.source();
+        this.url = typeof r === 'string' ? r : r.url;
+        this.tag = typeof r === 'string' ? null : r.tag ?? null; // which source/quality the bytes come from
+        if (r?.chunkSize) { this.preferredChunk = r.chunkSize; if (!this.chunks) this.chunkSize = r.chunkSize; }
+        if (r?.group) this.group = r.group;
+        if (this.probing && !this.chunks) this.probing.end = this.chunkSize - 1;
+        return this.url;
+      })().finally(() => { this._resolving = null; });
+    }
+    return this._resolving;
+  }
+
+  /** Throw away partial progress (it belongs to a different file: another source or quality). */
+  async reset() {
+    this.chunks = null; this.total = null; this.probing = null; this.restoredTag = undefined;
+    if (this.preferredChunk) this.chunkSize = this.preferredChunk;
+    await this.fh?.truncate(0).catch(() => {});
+    try { fs.rmSync(this.metaFile, { force: true }); } catch { /* fine */ }
+  }
+
   async handle() {
     if (!this.fh) {
       this.fh = await fsp.open(this.part, fs.existsSync(this.part) ? 'r+' : 'w+');
@@ -161,7 +202,7 @@ export class TrackFetch extends EventEmitter {
     const now = Date.now();
     if (!force && now - (this._savedAt || 0) < 2000) return;
     this._savedAt = now;
-    fs.writeFile(this.metaFile, JSON.stringify({ total: this.total, chunk: CHUNK, got: this.chunks.map((c) => c.got) }), () => {});
+    fs.writeFile(this.metaFile, JSON.stringify({ total: this.total, chunk: this.chunkSize, tag: this.tag ?? null, got: this.chunks.map((c) => c.got) }), () => {});
   }
 
   async finalize() {
@@ -194,7 +235,7 @@ export class TrackFetch extends EventEmitter {
 
   saveMetaSync() {
     if (!this.chunks) return;
-    try { fs.writeFileSync(this.metaFile, JSON.stringify({ total: this.total, chunk: CHUNK, got: this.chunks.map((c) => c.got) })); } catch { /* best effort */ }
+    try { fs.writeFileSync(this.metaFile, JSON.stringify({ total: this.total, chunk: this.chunkSize, tag: this.tag ?? null, got: this.chunks.map((c) => c.got) })); } catch { /* best effort */ }
   }
 
   /**
@@ -235,10 +276,24 @@ export class TrackFetch extends EventEmitter {
 async function runChunk(f, c) {
   c.busy = true;
   pool.active++;
+  const group = f.group;
+  if (group) groupActive[group] = (groupActive[group] || 0) + 1;
   const from = c.start + c.got;
   let progressed = false;
   try {
-    const res = await fetch(f.url, { headers: { 'User-Agent': UA, Range: `bytes=${from}-${c.end}` }, signal: AbortSignal.timeout(60_000) });
+    const url = await f.resolve().catch((err) => { throw Object.assign(new Error(`no stream URL: ${err.message}`), { throttle: true }); });
+    if (f.chunks && f.restoredTag !== undefined && (f.restoredTag ?? null) !== (f.tag ?? null)) {
+      if (!f.chunks.some((x) => x.busy && x !== c)) await f.reset();
+      throw new Error('saved progress was for another source; starting over');
+    }
+    f.restoredTag = undefined; // checked once
+    const res = await fetch(url, { headers: { 'User-Agent': UA, Range: `bytes=${from}-${c.end}` }, signal: AbortSignal.timeout(60_000) });
+    if ([401, 403, 410].includes(res.status) && typeof f.source === 'function' && f.urlRefreshes < 5) {
+      res.body?.cancel().catch(() => {});
+      f.urlRefreshes++;
+      f.url = null; // a signed URL that expired: get a fresh one next time
+      throw new Error(`HTTP ${res.status}: stream URL expired`);
+    }
     if (res.status === 429 || res.status >= 500) { res.body?.cancel().catch(() => {}); throw Object.assign(new Error(`HTTP ${res.status}`), { throttle: true, status: res.status }); }
     if (res.status === 404 || res.status === 410 || res.status === 403) throw Object.assign(new Error(`HTTP ${res.status}: not available`), { fatal: true });
     if (res.status !== 206 && !(res.status === 200 && from === 0)) throw new Error(`HTTP ${res.status}`);
@@ -247,16 +302,21 @@ async function runChunk(f, c) {
     const total = range && /\/(\d+)$/.test(range) ? Number(range.match(/\/(\d+)$/)[1]) : res.status === 200 ? Number(res.headers.get('content-length')) || null : null;
     if (c.probe) {
       if (!total) throw Object.assign(new Error('the origin did not say how big the file is'), { fatal: true });
-      if (f.total && f.total !== total) throw Object.assign(new Error('the file changed upstream'), { fatal: true });
-      if (!f.chunks) f.initChunks(total);
+      if (!f.chunks) { f.initChunks(total); await f.fh?.truncate(total).catch(() => {}); }
       c = Object.assign(f.chunks[0], { busy: true }); // the probe fills the first chunk
       f.probing = null;
+    }
+    if (total && f.total && total !== f.total) {
+      // a different file than the one being assembled (the source or quality changed): start over
+      res.body?.cancel().catch(() => {});
+      if (!f.chunks?.some((x) => x.busy && x !== c)) await f.reset();
+      throw new Error('the file changed upstream; starting over');
     }
     const fh = await f.handle();
     const len = c.end - c.start + 1;
     for await (const buf of res.body) {
       const take = Math.min(buf.length, len - c.got);
-      if (take <= 0) break;
+      if (take <= 0 || !f.chunks?.includes(c)) break; // finished, or this attempt was discarded
       await fh.write(buf, 0, take, c.start + c.got);
       c.got += take;
       progressed = true;
@@ -275,6 +335,7 @@ async function runChunk(f, c) {
     c.busy = false;
     if (c.probe) f.probing = null;
     pool.active--;
+    if (group) groupActive[group]--;
     if (!f.finished) {
       f.saveMeta();
       if (f.chunks && f.chunks.every((x) => x.got >= x.end - x.start + 1)) await f.finalize();
@@ -290,10 +351,10 @@ async function runChunk(f, c) {
  * Start (or join) fetching `url` into `file`. A lower priority number is fetched first.
  * @returns {TrackFetch}
  */
-export function getFetch(key, url, file, { priority = 1000 } = {}) {
+export function getFetch(key, url, file, { priority = 1000, chunkSize = CHUNK, group = null } = {}) {
   let f = fetches.get(key);
   if (!f) {
-    f = new TrackFetch(key, url, file, { priority });
+    f = new TrackFetch(key, url, file, { priority, chunkSize, group });
     fetches.set(key, f);
   } else f.priority = Math.min(f.priority, priority);
   setImmediate(schedule);

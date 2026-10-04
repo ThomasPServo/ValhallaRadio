@@ -56,6 +56,10 @@ export function defaultDb() {
       chartRotation: true, // current formats: chart hits move between power, current and recurrent
       importedImaging: 'prefer', // prefer | mix: imported imaging files replace voiced copy of the same type, or rotate with it
       discoveryMode: 'auto', // auto | charts | ai | catalog: how new songs are found (charts and catalog need no AI music knowledge)
+      musicSource: 'arcod', // arcod (Qobuz: fast, MP3 320 or FLAC) or monochrome (TIDAL: lossless, slow origin)
+      arcodBase: 'https://player.arcod.xyz',
+      arcodQuality: '5', // 5 = MP3 320 kbps, 6 = FLAC 16/44.1, 7 = FLAC 24/96, 27 = FLAC 24/192
+      arcodConnections: 2,
       monochromeBase: 'https://tracks.monochrome.st',
       // Voice: 'auto' = ElevenLabs if keyed, else the free local Kokoro voice, else OpenAI
       ttsProvider: 'auto',
