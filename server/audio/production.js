@@ -34,7 +34,11 @@ function imagingBedId() {
 async function render(name, voiceFile, opts) {
   const file = path.join(TTS_CACHE_DIR, `${name}.wav`);
   const meta = `${file}.json`;
-  if (fs.existsSync(file) && fs.existsSync(meta)) return { file, markers: JSON.parse(fs.readFileSync(meta, 'utf8')) };
+  if (fs.existsSync(file) && fs.existsSync(meta)) {
+    const now = new Date();
+    try { fs.utimesSync(file, now, now); fs.utimesSync(meta, now, now); } catch { /* fine */ } // in use: the janitor keeps it
+    return { file, markers: JSON.parse(fs.readFileSync(meta, 'utf8')) };
+  }
   const pcm = await decodeToPcm(voiceFile);
   const markers = await analyze('produce', pcm, { ...opts, out: file });
   fs.writeFileSync(meta, JSON.stringify(markers));

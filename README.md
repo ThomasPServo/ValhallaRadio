@@ -156,6 +156,19 @@ Claude writes in the persona's voice and is never allowed to invent facts. Numbe
 - **Cache warming:** when nothing urgent is fetching, the rest of the library is fetched in the background, power rotation first, until the cache is 90% full.
 - **Cache size:** the cache defaults to 8 GB, about 250 lossless songs. Every cached song airs without touching the origin, so a cache that holds your whole rotation means steady state needs almost no network. *Engineering → Decks* shows the fetch queue, speed and connections live.
 
+### Waveforms, previews and disk space
+
+- **Whole waveforms at once.** As soon as a song's file arrives, one quick pass computes its entire waveform, so the studio shows the whole song the moment it's scheduled instead of filling it in as it plays.
+- **Scrubbable previews.** Anything you preview (songs, imaging, spots, beds, voice tests) plays in a player bar showing its whole waveform. Click or drag to jump, use ← and → to skip 5 seconds, space to play or pause, and Esc to close. Song previews from arcod are sent as complete files, so you can seek anywhere.
+- **Nothing piles up.** An hourly clean-up deletes files nothing needs:
+  - cached songs no longer in the library or the log (previews get a day's grace), on top of the cache size limit;
+  - waveforms of songs that are gone, and abandoned partial downloads after a day;
+  - one-off DJ, weather, traffic and news renders after 6 hours, and raw speech after 2 days;
+  - imaging, spot and bed renders after 30 days unused (every reuse resets the clock);
+  - uploads that no imaging piece, spot, bed or logo uses, after a day.
+
+  Removing a song from the library deletes its audio and waveform straight away.
+
 ### Imaging
 
 - **Produced automatically from copy**, with sound design rendered in a worker thread: whooshes, risers, sub-drop impacts, reverb and an echo throw on the last word. Six styles: *punch*, *riser*, *smooth*, *stutter*, *voiced over the music bed*, and *dry*.

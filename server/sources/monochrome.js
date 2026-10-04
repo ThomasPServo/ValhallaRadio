@@ -16,6 +16,7 @@ import { MUSIC_CACHE_DIR } from '../config.js';
 import { store } from '../store.js';
 import { getFetch, activeFetch, fetcherStatus, BACKGROUND, CHUNK } from './fetcher.js';
 import * as arcod from './arcod.js';
+import { ensurePeaks } from '../audio/peakFile.js';
 import { findTrack } from '../scheduler/library.js';
 
 const UA = 'ValhallaRadio/0.1 (+radio automation)';
@@ -201,7 +202,10 @@ export function cachedPath(trackId) {
  */
 export function fetchTrack(trackId, { priority = 1000 } = {}) {
   const final = cachedPath(trackId);
-  if (fs.existsSync(final) && fs.statSync(final).size > 10000) return null;
+  if (fs.existsSync(final) && fs.statSync(final).size > 10000) {
+    try { const now = new Date(); fs.utimesSync(final, now, now); } catch { /* fine */ } // recently used: last to be evicted
+    return null;
+  }
   const id = String(trackId);
   let f;
   if (fromArcod(id)) {
@@ -220,7 +224,7 @@ export function fetchTrack(trackId, { priority = 1000 } = {}) {
   } else {
     f = getFetch(id, streamUrl(id), final, { priority });
   }
-  if (!f._pruneHooked) { f._pruneHooked = true; f.done.then(() => pruneCache(), () => {}); }
+  if (!f._pruneHooked) { f._pruneHooked = true; f.done.then((file) => { ensurePeaks(id, file); pruneCache(); }, () => {}); } // the whole waveform, as soon as the file is in
   return f;
 }
 

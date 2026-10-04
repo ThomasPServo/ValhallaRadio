@@ -162,12 +162,9 @@ export async function save(section, body, msg = 'Saved') {
   toast(msg);
 }
 
-export function play(src) {
-  const a = $('#preview');
-  if (a.dataset.src === src && !a.paused) { a.pause(); return; }
-  a.dataset.src = src;
-  a.src = src;
-  a.play().catch((e) => toast(e.message, true));
+/** Preview a file in the player bar (player.js): play/pause, time, and a scrubbable waveform. */
+export function play(src, { title = '' } = {}) {
+  bus.emit('preview', { src, title });
 }
 
 export function uploadFile(accept = 'audio/*') {

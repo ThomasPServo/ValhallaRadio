@@ -9,6 +9,7 @@ import { clocks, djs } from './js/programming.js';
 import { imaging, spots } from './js/imaging.js';
 import { station, streaming, ai, settings } from './js/station.js';
 import { maybeWizard, openWizard } from './js/wizard.js';
+import './js/player.js'; // the preview player bar
 
 const VIEWS = { studio, log, library, clocks, engineering, programming: djs, imaging, commercials: spots, station, streaming, ai, settings };
 let current = 'studio';

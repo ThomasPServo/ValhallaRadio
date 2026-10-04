@@ -73,7 +73,7 @@ function libRow(t) {
   const a = t.analysis || {};
   const end = t.markers?.endType || a.endType;
   return `<tr data-id="${t.id}" class="${t.disabled ? 'off' : ''}">
-    <td><button class="icon" data-action="preview" data-id="${t.id}" title="Preview">▶</button></td>
+    <td><button class="icon" data-action="preview" data-id="${t.id}" data-title="${esc(`${t.artist} – ${t.title}`)}" title="Preview">▶</button></td>
     <td><div class="songcell"><div class="thumb" style="background-image:url('${esc(t.artwork || '')}')"></div><div style="min-width:0">
       <b>${esc(t.title)}</b> ${t.explicit ? '<span class="badge e" title="Explicit version">E</span>' : t.note === 'clean version' ? '<span class="badge clean" title="Swapped for the clean radio edit">clean</span>' : ''}
       <div class="muted small">${t.chart ? `<span class="badge chart" title="${esc(t.chart.chart)}">#${t.chart.rank}</span> ` : t.chartPeak ? `<span class="badge" title="Chart peak (${esc(t.chartPeak.chart)})">pk #${t.chartPeak.peak}</span> ` : ''}${esc(t.artist)}${t.year ? ` · ${t.year}` : ''}${t.facts?.genre ? ` · ${esc(t.facts.genre)}` : ''}${t.facts?.voice ? ` · ${esc(t.facts.voice)}` : ''}${t.facts?.popularity != null ? ` · <span title="Popularity (Deezer)">★${t.facts.popularity}</span>` : ''}${t.album ? ` · ${esc(t.album)}` : ''}</div></div></div></td>
@@ -99,7 +99,7 @@ async function loadLibrary() {
 function resultTrack(t) {
   return `<div class="result-row"><img src="${esc(t.artwork)}" alt="" loading="lazy">
     <div style="min-width:0"><b>${esc(t.title)}</b> ${t.explicit ? '<span class="badge e">E</span>' : ''}<div class="small muted">${esc(t.artist)} · ${fmtDur(t.duration)}</div></div>
-    <div class="row nowrap"><button class="icon" data-action="preview" data-id="${t.id}">▶</button><button class="icon" data-action="addTrack" data-track='${esc(JSON.stringify(t))}'>＋</button></div></div>`;
+    <div class="row nowrap"><button class="icon" data-action="preview" data-id="${t.id}" data-title="${esc(`${t.artist} – ${t.title}`)}">▶</button><button class="icon" data-action="addTrack" data-track='${esc(JSON.stringify(t))}'>＋</button></div></div>`;
 }
 
 // ------------------------------------------------------------------ charts
@@ -232,7 +232,7 @@ const TABBODY = {
 export const library = {
   render: () => `
     <h1>Music library</h1>
-    <p class="sub">${state.B.libraryCount} songs from ${state.B.settings.musicSource === 'monochrome' ? 'monochrome (TIDAL, lossless)' : `arcod (Qobuz, ${({ 5: 'MP3 320 kbps', 6: 'FLAC', 7: 'hi-res FLAC', 27: 'hi-res FLAC' })[state.B.settings.arcodQuality || 5] || 'MP3 320 kbps'})`}, fetched into the cache ahead of air. Intros, endings and tempo are analysed as songs play.</p>
+    <p class="sub">${state.B.libraryCount} song${state.B.libraryCount === 1 ? '' : 's'} from ${state.B.settings.musicSource === 'monochrome' ? 'monochrome (TIDAL, lossless)' : `arcod (Qobuz, ${({ 5: 'MP3 320 kbps', 6: 'FLAC', 7: 'hi-res FLAC', 27: 'hi-res FLAC' })[state.B.settings.arcodQuality || 5] || 'MP3 320 kbps'})`}, fetched into the cache ahead of air. Intros, endings and tempo are analysed as songs play.</p>
     <div class="tabs">${TABS.map(([k, l]) => `<button class="${ui.tab === k ? 'active' : ''}" data-action="tab" data-tab="${k}">${l}</button>`).join('')}</div>
     <div id="libBody">${TABBODY[ui.tab]()}</div>`,
   mount() {
@@ -260,7 +260,7 @@ export const library = {
   },
   actions: {
     tab: (b) => { ui.tab = b.dataset.tab; bus.emit('rerender'); },
-    preview: (b) => play(`/api/monochrome/stream/${b.dataset.id}`),
+    preview: (b) => play(`/api/monochrome/stream/${b.dataset.id}`, { title: b.dataset.title }),
     playNext: (b) => run(b, () => api('POST', '/api/log/insert', { trackId: b.dataset.id }), 'Song will play next'),
     toggleTrack: async (b) => { const t = ui.lib.find((x) => x.id === b.dataset.id); await api('PATCH', `/api/library/${t.id}`, { disabled: !t.disabled }); loadLibrary(); },
     delTrack: async (b) => { if (!confirm('Remove this song from the library?')) return; await api('DELETE', `/api/library/${b.dataset.id}`); state.B.libraryCount--; loadLibrary(); },

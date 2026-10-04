@@ -12,6 +12,7 @@ import { SAMPLE_RATE as SR, CACHE_DIR } from '../config.js';
 import { store } from '../store.js';
 import * as mono from '../sources/monochrome.js';
 import { setPriority, dropFetches, fetcherStatus } from '../sources/fetcher.js';
+import { ensurePeaks, readPeaks } from '../audio/peakFile.js';
 import * as library from '../scheduler/library.js';
 import { KIND, estDuration } from '../scheduler/logs.js';
 import { loadAudio } from './audio.js';
@@ -540,6 +541,7 @@ export class Playout extends EventEmitter {
     // from the cache, or from a chunked fetch that is filling the cache (playback starts on its first bytes)
     const fetch = mono.fetchTrack(track.id, { priority: 0 });
     const local = fetch ? null : mono.cachedPath(track.id);
+    if (local) ensurePeaks(track.id, local); // cached before waveforms were computed up front
     const decoder = new StreamDecoder({
       file: local || undefined, source: fetch || undefined, durationHint: track.duration,
       maxAheadSec: 75, keepBehindSec: 45, label: `${track.artist} - ${track.title}`,
@@ -736,10 +738,18 @@ export class Playout extends EventEmitter {
       const f = path.join(PEAKS_DIR, `${it.trackId}.i8`);
       if (fs.existsSync(f)) { const b = fs.readFileSync(f); arr = new Int8Array(b.buffer, b.byteOffset, b.length); offset = library.findTrack(it.trackId)?.analysis?.startSec || 0; }
     }
+    // the whole song's overview, computed when its file arrived, beats the decoder's partial one
+    const trackId = it?.trackId || src?.item?.trackId;
+    const full = trackId ? readPeaks(trackId) : null;
+    let complete = !(src?.decoder && !src.decoder.ended);
+    if (full && (!arr || full.length >= arr.length)) {
+      arr = full; complete = true;
+      if (!src?.decoder && !it?.prep) offset = library.findTrack(trackId)?.analysis?.startSec || 0;
+    }
     if (!arr) return null;
     const skip = Math.min(arr.length, Math.round(offset / PEAK_SECONDS) * 2);
     const data = arr.subarray(skip);
-    return { id, res: PEAK_SECONDS, complete: !(src?.decoder && !src.decoder.ended), data: Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64') };
+    return { id, res: PEAK_SECONDS, complete, data: Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString('base64') };
   }
 
   timeline() {

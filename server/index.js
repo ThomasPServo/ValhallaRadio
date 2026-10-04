@@ -35,6 +35,8 @@ import { startEnricher, enrichStatus } from './scheduler/enricher.js';
 import { CHARTS, FORMAT_CHARTS, stationCharts, getChart, refreshCharts, chartStatus, startChartWatch, sameSong } from './sources/charts.js';
 import { songInfo } from './sources/songInfo.js';
 import { classifyImaging, imagingName } from './audio/imagingImport.js';
+import { startJanitor, forgetSong, janitorStatus } from './scheduler/janitor.js';
+import { computePeaks, ensurePeaks, readPeaks } from './audio/peakFile.js';
 
 const scheduler = new Scheduler();
 const streamer = new Streamer();
@@ -260,6 +262,14 @@ app.get('/api/monochrome/stream/:id', wrap(async (req, res) => {
     return res.type(typeOf(head)).sendFile(mono.cachedPath(id));
   }
   const f = mono.fetchTrack(id, { priority: 100 });
+  // arcod delivers a whole song in a second or two: wait for it and send the file, so the player can scrub
+  if (mono.musicSource() === 'arcod') {
+    const file = await Promise.race([f.done.catch(() => null), new Promise((r) => setTimeout(r, 20_000, null))]);
+    if (file && mono.isCached(id)) {
+      const fd = fs.openSync(file, 'r'); const head = Buffer.alloc(4); fs.readSync(fd, head, 0, 4, 0); fs.closeSync(fd);
+      return res.type(typeOf(head)).sendFile(file);
+    }
+  }
   let gone = false;
   req.on('close', () => { gone = true; });
   try {
@@ -331,6 +341,29 @@ app.get('/api/charts/:id', wrap(async (req, res) => {
   const lib = store.data.library;
   res.json({ ...c, entries: c.entries.map((e) => { const t = lib.find((x) => sameSong(x, e)); return { ...e, trackId: t?.id || null, category: t?.category || null }; }) });
 }));
+/** The whole waveform of anything the studio can preview: uploads, rendered audio, songs. */
+app.get('/api/waveform', wrap(async (req, res) => {
+  const src = String(req.query.src || '');
+  let peaks = null;
+  const song = /^\/api\/monochrome\/stream\/([\w-]+)$/.exec(src);
+  if (song) {
+    const id = song[1];
+    peaks = readPeaks(id);
+    if (!peaks) {
+      if (!mono.isCached(id)) await mono.download(id).catch(() => null);
+      if (mono.isCached(id)) { await ensurePeaks(id, mono.cachedPath(id)); peaks = readPeaks(id); }
+    }
+  } else {
+    const m = /^\/(uploads|tts)\/([\w.-]+)$/.exec(src.split('?')[0]);
+    if (!m) throw bad('unknown audio');
+    const file = path.join(m[1] === 'uploads' ? UPLOAD_DIR : TTS_CACHE_DIR, m[2]);
+    if (!fs.existsSync(file)) throw Object.assign(new Error('not found'), { status: 404 });
+    peaks = await computePeaks(file);
+  }
+  if (!peaks) throw Object.assign(new Error('no waveform yet'), { status: 404 });
+  res.json({ res: 0.05, data: Buffer.from(peaks.buffer, peaks.byteOffset, peaks.byteLength).toString('base64') });
+}));
+
 app.post('/api/charts/refresh', wrap(async (req, res) => res.json(await refreshCharts())));
 app.post('/api/charts/add', wrap(async (req, res) => {
   const songs = (req.body.songs || []).slice(0, 50);
@@ -361,7 +394,7 @@ app.put('/api/library/:id/markers', (req, res) => {
   res.json(library.updateTrack(req.params.id, { markers: m }));
 });
 app.patch('/api/library/:id', (req, res) => res.json(library.updateTrack(req.params.id, req.body)));
-app.delete('/api/library/:id', (req, res) => { library.removeTrack(req.params.id); res.json({ ok: true }); });
+app.delete('/api/library/:id', (req, res) => { library.removeTrack(req.params.id); forgetSong(req.params.id, scheduler.allItems()); res.json({ ok: true }); });
 
 // ------------------------------------------------------------------ configuration
 const sections = {
@@ -619,6 +652,7 @@ setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', e
 if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
 const imagingCheck = startAutoImaging();
 mono.startCacheWarmer(() => library.playable()); // fill the cache with the library while nothing urgent is fetching
+startJanitor(() => scheduler.allItems()); // delete files nothing needs any more
 startChartWatch(); // this station's charts: chart positions, peaks and chart-driven rotation
 startEnricher(); // song facts (genre, original year, popularity, tempo, vocal) from open music data
 setupEvents.on('progress', (p) => { if (p.done) setTimeout(imagingCheck, 5000); }); // a new station's first fresh imaging, once its library is in

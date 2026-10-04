@@ -11,6 +11,8 @@ import { store } from '../store.js';
 import { kokoroInstalled, kokoroSpeak } from './kokoro.js';
 import { speakable } from './speech.js';
 
+const touch = (f) => { try { const now = new Date(); fs.utimesSync(f, now, now); } catch { /* fine */ } };
+
 export function activeProvider() {
   const s = store.settings;
   const p = s.ttsProvider || 'auto';
@@ -56,7 +58,7 @@ export async function synthesize(text, voice = {}) {
     .digest('hex');
   const ext = provider === 'kokoro' ? 'wav' : 'mp3';
   const file = path.join(TTS_CACHE_DIR, `${id}.${ext}`);
-  if (fs.existsSync(file)) return file;
+  if (fs.existsSync(file)) { touch(file); return file; } // reuse keeps it from the janitor
 
   if (provider === 'kokoro') {
     await kokoroSpeak(spoken, { voice: voice.kokoroVoice || 'af_heart', speed: voice.speed || 1, pause: voice.pause ?? 0.3, out: file });
