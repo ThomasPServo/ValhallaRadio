@@ -6,7 +6,7 @@
   "main": "server/index.js",
   "scripts": {
     "start": "node --env-file-if-exists=.env server/index.js",
-    "dev": "node --env-file-if-exists=.env --watch server/index.js",
+    "dev": "node scripts/dev.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {

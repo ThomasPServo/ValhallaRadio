@@ -73,8 +73,11 @@ function startWorker() {
   if (ready) return ready;
   fs.mkdirSync(MODELS, { recursive: true });
   ready = new Promise((resolve, reject) => {
+    const env = { ...process.env, KOKORO_DIR: DIR, KOKORO_MODELS: MODELS };
+    delete env.WATCH_REPORT_DEPENDENCIES; // under `npm run dev`, don't make the worker report its imports over our IPC channel
     worker = fork(new URL('./kokoroWorker.js', import.meta.url), [], {
-      env: { ...process.env, KOKORO_DIR: DIR, KOKORO_MODELS: MODELS },
+      env,
+      execArgv: process.execArgv.filter((a) => !a.startsWith('--watch')),
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     });
     worker.on('message', (m) => {
