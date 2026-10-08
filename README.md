@@ -40,6 +40,8 @@ Open **http://localhost:8080**. The setup wizard walks you through five steps:
 
 Listeners tune in at `/stream.mp3` or on your branded player at `/listen`.
 
+**🎧 Monitor** in the studio plays the program the moment the engine makes it, about a tenth of a second behind. It's raw audio over the studio's WebSocket into an AudioWorklet with a 100 ms cushion, so you hear a cart or a talk-up as it happens. The public stream and `/listen` run a few seconds behind because of the MP3 encoder and the player's own buffering. The monitor keeps playing on every studio page and in a background tab. It uses about 1.4 Mbit/s (16-bit stereo), which is fine on a LAN or broadband. If the connection can't keep up, it skips ahead rather than drifting behind.
+
 ### Running on a server or in Docker
 
 On a headless machine, sign in one of these ways:

@@ -3,6 +3,7 @@
 
 import { $, $$, esc, fmtDur, fmtTenths, state, api, run, toast, bus, subscribe, sinceState, sinceTimeline, stationParts, stationTime, KIND, ICON, TYPE_LABEL, catChip, q, setText, setHtml, setStyle } from './core.js';
 import { drawWaveform, drawTimeline, drawHourClock, drawPPM } from './widgets.js';
+import { monitor, startMonitor, stopMonitor, setMonitorVolume, monitorVolume } from './monitor.js';
 
 let raf = 0;
 const BAND_NAMES = ['Sub', 'Low', 'Mid', 'Pres', 'Air'];
@@ -31,8 +32,9 @@ export function render() {
         <button class="onair big" id="goBtn" data-action="start">● Go on air</button>
         <button class="big" id="stopBtn" data-action="stop" style="display:none">■ Off air</button>
         <button class="big" data-action="skip" title="Fade the current element and take the next one">⏭ Take next</button>
-        <button class="big" id="monBtn" data-action="monitor">🎧 Monitor</button>
+        <button class="big" id="monBtn" data-action="monitor" title="Hear the program as it goes out, without the stream's delay">🎧 Monitor</button>
         <input type="range" min="0" max="1" step="0.01" id="vol" style="width:100px" title="Monitor volume">
+        <span class="small muted" id="monNote"></span>
         <span class="spacer"></span>
         <span class="small muted" id="engineNote"></span>
       </div>
@@ -82,13 +84,12 @@ export function render() {
 export function mount() {
   subscribe(['meters', 'timeline']);
   lastMeters = null;
-  const mon = $('#monitor');
-  $('#vol').value = mon.volume;
-  $('#vol').oninput = (e) => { mon.volume = Number(e.target.value); };
-  $('#monBtn').textContent = mon.paused ? '🎧 Monitor' : '🔇 Stop monitor';
+  $('#vol').value = monitorVolume();
+  $('#vol').oninput = (e) => setMonitorVolume(Number(e.target.value));
+  monitorNote();
   renderQueue();
   updateStatic();
-  const offs = [bus.on('log', renderQueue), bus.on('state', () => { updateStatic(); renderQueue(); }), bus.on('nowPlaying', updateStatic)];
+  const offs = [bus.on('log', renderQueue), bus.on('state', () => { updateStatic(); renderQueue(); monitorNote(); }), bus.on('nowPlaying', updateStatic)];
   // 30 frames a second: readings arrive 12-20 times a second and the timeline moves ~13 px/s, so it looks
   // the same as 60 and costs the browser half as much
   let drawn = 0;
@@ -96,6 +97,12 @@ export function mount() {
   raf = requestAnimationFrame(loop);
   setupDrag();
   return () => { cancelAnimationFrame(raf); offs.forEach((f) => f()); subscribe([]); };
+}
+
+/** The monitor button, and how far behind the program it is (the engine's real time, not the stream's). */
+function monitorNote() {
+  $('#monBtn').textContent = monitor.on ? '🔇 Stop monitor' : '🎧 Monitor';
+  $('#monNote').textContent = monitor.on ? (state.S?.running ? `live · ${Math.round(monitor.bufferSec * 1000 + 20)} ms behind` : 'live · off air') : '';
 }
 
 function updateStatic() {
@@ -271,10 +278,10 @@ export const actions = {
   start: (b) => run(b, () => api('POST', '/api/engine/start'), 'Station is on air'),
   stop: (b) => { if (confirm('Take the station off air?')) run(b, () => api('POST', '/api/engine/stop')); },
   skip: () => api('POST', '/api/engine/skip').catch((e) => toast(e.message, true)),
-  monitor: (b) => {
-    const m = $('#monitor');
-    if (m.paused) { m.src = `/stream.mp3?t=${Date.now()}`; m.play().catch((e) => toast(e.message, true)); b.textContent = '🔇 Stop monitor'; }
-    else { m.pause(); m.removeAttribute('src'); m.load(); b.textContent = '🎧 Monitor'; }
+  monitor: async () => {
+    if (monitor.on) stopMonitor();
+    else await startMonitor().catch((e) => { stopMonitor(); toast(`Monitor: ${e.message}`, true); });
+    monitorNote();
   },
   fireCart: (b) => { b.classList.remove('firing'); void b.offsetWidth; b.classList.add('firing'); run(null, () => api('POST', `/api/carts/${b.dataset.id}/fire`)); },
   insertType: (b) => run(b, () => api('POST', '/api/log/insert', { type: b.dataset.type }), `${TYPE_LABEL[b.dataset.type]} queued next`),

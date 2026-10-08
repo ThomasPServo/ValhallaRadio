@@ -664,10 +664,16 @@ server.on('upgrade', (req, socket, head) => {
 });
 /** Live feeds (meters, scope, timeline) are computed and sent only while some screen shows them. */
 function countWatchers() {
-  const n = { level: 0, meters: 0, scope: 0, timeline: 0, decks: 0 };
+  const n = { level: 0, meters: 0, scope: 0, timeline: 0, decks: 0, monitor: 0 };
   for (const c of wss.clients) if (c.readyState === 1) for (const t of c.topics) if (t in n) n[t]++;
   engine.watch(n);
 }
+// The studio monitor gets the program as raw PCM the moment it's rendered (the stream's encoder and the
+// player's buffer add seconds). A monitor that can't keep up skips audio rather than falling behind.
+const MONITOR_BACKLOG = 44100 * 4 * 0.4; // bytes: 0.4 s of 16-bit stereo
+engine.on('pcm', (bytes) => {
+  for (const c of wss.clients) if (c.readyState === 1 && c.topics.has('monitor') && c.bufferedAmount < MONITOR_BACKLOG) c.send(bytes, { binary: true });
+});
 function broadcast(type, data, topic) {
   const msg = JSON.stringify({ type, data });
   for (const c of wss.clients) if (c.readyState === 1 && (!topic || c.topics?.has(topic))) c.send(msg);

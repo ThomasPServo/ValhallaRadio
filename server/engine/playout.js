@@ -56,7 +56,7 @@ export class Playout extends EventEmitter {
     this.lastError = null;
     this.level = { l: 0, r: 0 };
     this.processor = new BroadcastProcessor(SR, this.processingParams());
-    this.watchers = { level: 0, meters: 0, scope: 0, timeline: 0, decks: 0 }; // open screens that show each live feed
+    this.watchers = { level: 0, meters: 0, scope: 0, timeline: 0, decks: 0, monitor: 0 }; // open screens that show each live feed
     this.processor.setMetering(false); // meter-only analysis runs while a screen shows the meters
     this.mixBuf = new Float32Array(0); // reused render buffer
     this.bed = null; // the auto-bed source while it's up (or fading)
@@ -162,6 +162,7 @@ export class Playout extends EventEmitter {
     const lv = this.level;
     lv.l = Math.max(pl, lv.l * 0.8); lv.r = Math.max(pr, lv.r * 0.8);
     this.streamer.write(out);
+    if (this.watchers.monitor) this.emit('pcm', bytes); // the studio's monitor: the program as it's made, not the stream
     this.written += due;
   }
 
@@ -862,6 +863,7 @@ export class Playout extends EventEmitter {
       now,
       next: this.cue ? { ...this.publicItem(this.cue.item), in: Math.round(((this.cue.startFrame - this.frame) / SR) * 10) / 10 } : null,
       overlays: this.sources.filter((s) => s.overlay && !s.done).map((s) => ({ title: s.item.title, type: s.item.type, remaining: Math.max(0, s.len - s.position) })),
+      sampleRate: SR,
       listeners: this.streamer.listeners.size,
       icecast: this.streamer.icecastStatus,
       deadAir: this.running && !this.sources.some((s) => !s.done && !s.overlay),

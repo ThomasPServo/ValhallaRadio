@@ -73,8 +73,10 @@ let ws = null;
 let topics = [];
 export function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
+  ws.binaryType = 'arraybuffer';
   ws.onopen = () => { sendTopics(); bus.emit('connected'); };
   ws.onmessage = (e) => {
+    if (e.data instanceof ArrayBuffer) return bus.emit('pcm', e.data); // the studio monitor's audio
     const { type, data } = JSON.parse(e.data);
     if (type === 'state') { state.S = data; state.S_at = performance.now(); }
     else if (type === 'timeline') { state.TL = data; state.TL_at = performance.now(); requestPeaks(data.items); }
@@ -103,8 +105,11 @@ export function connect() {
 export function send(msg) { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); }
 // Live feeds: the top bar's level on every page, plus what the open view asks for. A tab in the background
 // takes none of them (the server then doesn't compute them either).
-function sendTopics() { send({ type: 'sub', topics: document.hidden ? [] : ['level', ...topics] }); }
+// The monitor's audio keeps coming in a background tab and on every page: the DJ is listening.
+let monitoring = false;
+function sendTopics() { send({ type: 'sub', topics: [...(document.hidden ? [] : ['level', ...topics]), ...(monitoring ? ['monitor'] : [])] }); }
 export function subscribe(list) { topics = list; sendTopics(); }
+export function setMonitoring(on) { monitoring = on; sendTopics(); }
 document.addEventListener('visibilitychange', sendTopics);
 
 /** Ask for waveforms of timeline items we don't have yet (or that are still decoding). */
