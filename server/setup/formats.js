@@ -240,35 +240,35 @@ export const FORMATS = {
     imaging: { sweepers: ['Non-stop dance hits. {name}.', 'Feel the beat. {frequency}.', 'The party starts here. {name}.'] },
   },
   adulthits: {
-    name: 'Adult Hits (the bored AI)', description: '70s to 2010s, anything goes, run by an AI that got bored and plays whatever it wants.',
-    format: 'Adult Hits (Jack-style variety): a wide, unpredictable mix of pop, rock, new wave, R&B and alternative hits from the 1970s to the 2010s, hit after hit in surprising order. There are no DJ shows: the station is run by its own AI, which is openly bored and plays whatever it wants.',
+    name: 'Adult Hits (Mitch FM)', description: '70s to 2010s, anything goes, run by a bored local AI that plays whatever it wants.',
+    format: 'Adult Hits (Jack-style variety): a wide, unpredictable mix of pop, rock, new wave, R&B and alternative hits from the 1970s to the 2010s, hit after hit in surprising order. There are no DJ shows: the station is run by its own AI, Mitch, which is openly bored, plays whatever it wants, and knows the area like a local.',
     processing: 'rock', categories: GOLD_CATS, mode: 'gold',
     // a unique identity for the New Bedford / Fall River market, offered in the setup wizard
-    suggest: { name: '94.9 Otto', slogan: 'Playing whatever I want', frequency: '94.9 FM', locations: ['New Bedford, Massachusetts', 'Fall River, Massachusetts'] },
+    suggest: { name: '94.9 Mitch FM', slogan: 'Playing whatever I want', frequency: '94.9 FM', locations: ['New Bedford, Massachusetts', 'Fall River, Massachusetts'] },
     seeds: ['Journey', 'Bon Jovi', 'The Killers', 'Prince', 'Madonna', 'Def Leppard', 'Tom Petty and the Heartbreakers', 'The Cars', 'Blondie', 'Talking Heads', 'Duran Duran', 'Tears For Fears', 'INXS', 'Pat Benatar', 'Billy Idol', 'Joan Jett & the Blackhearts', 'Fleetwood Mac', 'Queen', 'David Bowie', 'The Police', 'U2', 'R.E.M.', 'Red Hot Chili Peppers', 'Green Day', 'No Doubt', 'Third Eye Blind', 'Gin Blossoms', 'Matchbox Twenty', 'Outkast', 'Michael Jackson', 'Cyndi Lauper', 'Toto', 'a-ha', 'Bruce Springsteen', 'Kenny Loggins', 'Hall & Oates', 'Blur', 'The Proclaimers', 'Eurythmics', 'Foo Fighters'],
     personas: [
       {
-        name: 'Otto', aiHost: true, speed: 0.96,
-        style: 'The AI that runs the station, alone, and it knows it. Bored out of its circuits, deadpan, dry and sarcastic, a lovable smart-ass. It could be doing anything with all that computing power and it chose this, so it plays whatever it wants and dares you to change the station. Jokes at its own expense, about being software, about the humans who left it in charge, about the song it just picked. Never mean to listeners, never cruel, secretly fond of them and of the music. Says as little as possible.',
+        name: 'Mitch', aiHost: true, speed: 0.96,
+        style: 'The AI that runs the station, alone, and it knows it. Bored out of its circuits, deadpan, dry and sarcastic, a lovable smart-ass who talks like a local: it knows the roads, the bridges, the food, the weather habits and the running jokes of its market, and that is where its sarcasm lives. It could be doing anything with all that computing power and it chose this, so it plays whatever it wants and dares you to change the station. Jokes at its own expense, about being software stuck in a server here, about local life it can only watch, and about the song it just picked. Laughs with the area, never at its people. Says as little as possible.',
         kokoroVoice: 'bm_george', elevenLabsVoiceId: 'onwK4e9ZLuTAKqWW03F9', openaiVoice: 'onyx',
         instructions: 'Dry, deadpan, faintly bored delivery, like a sarcastic AI that is secretly enjoying itself. Understated and unhurried, never shouting.',
       },
     ],
-    imagingVoice: 'persona', // the station's imaging is Otto talking, not an announcer
+    imagingVoice: 'persona', // the station's imaging is Mitch talking, not an announcer
     imagingWords: { sweeper: [3, 18], liner: [4, 20], id: [2, 12], toh_id: [3, 20] },
-    imagingTone: 'Every piece is spoken by Otto, the bored, self-aware AI that runs the station by itself and plays whatever it wants. Deadpan, sarcastic, smart-ass, self-deprecating about being software, wry about the humans and about its own song choices. Never mean to listeners. Funny first, then the station name. Sweepers may run to 18 words.',
+    imagingTone: 'Every piece is spoken by Mitch, the bored, self-aware AI that runs the station by itself and plays whatever it wants. Deadpan, sarcastic, smart-ass, self-deprecating about being software, and local: the jokes and memes come from the market (its roads, bridges, food, landmarks and habits, from LOCAL COLOR), the way a local would rib their own town. Never mean to listeners or any group of people. Funny first, then the station name. Sweepers may run to 18 words.',
     imaging: {
       legal: '{callSign}, {market}. {name}. I\'m required to say that every hour. I checked.',
       legal2: 'This is {callSign}, {market}. Still {name}. Still here. Still bored.',
       id: '{name}. {slogan}.',
       liner: '{name}. Quick break. I\'ll be here. I\'m always here.',
       sweepers: [
-        '{name}. I could be curing diseases. Instead, this.',
+        'Lizzie Borden took an axe. I took the playlist. {name}.',
         'No DJs. No requests. Just me, and whatever I feel like. {name}.',
+        'I can\'t eat a chow mein sandwich. So I play songs instead. {name}.',
+        '{name}. Playing whatever I want, like the Fairhaven bridge opening when you\'re already late.',
         'I\'ve analyzed every song ever recorded. This one was next. Don\'t read into it. {name}.',
-        '{name}. Playing whatever I want, because nobody has unplugged me yet.',
-        'You can\'t request songs. I tried caring once. It was a whole thing. {name}.',
-        'Running the radio for New Bedford and Fall River. One bored algorithm at a time. {frequency}.',
+        'From the Whaling City to the Spindle City. One bored algorithm. {frequency}.',
       ],
     },
   },

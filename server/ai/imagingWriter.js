@@ -7,6 +7,7 @@ import { store } from '../store.js';
 import { claudeAvailable, claudeJson, checkClaudeCode } from './claude.js';
 import { zoned } from '../util/time.js';
 import { FORMATS } from '../setup/formats.js';
+import { localColorText } from './localColor.js';
 
 export const FX_CHOICES = ['punch', 'riser', 'smooth', 'stutter', 'music', 'dry'];
 export const PLACEHOLDERS = ['name', 'frequency', 'callSign', 'market', 'slogan', 'website'];
@@ -203,6 +204,7 @@ async function claudePieces(ctx, mix, guidance) {
       `Station: ${st.name}${st.slogan ? ` — "${st.slogan}"` : ''}.${st.frequency && st.name.includes(String(st.frequency).replace(/\s*(FM|AM)$/i, '').trim()) ? ' The name already contains the frequency, so never use {name} and {frequency} in the same piece.' : ''} Placeholders available: ${PLACEHOLDERS.filter((k) => ({ name: st.name, frequency: st.frequency, callSign: st.callSign, market: ctx.market, slogan: st.slogan, website: st.website })[k]).map((k) => `{${k}}`).join(' ')}`,
       `Format: ${st.format}`,
       FORMATS[st.formatId]?.imagingTone ? `Station voice: ${FORMATS[st.formatId].imagingTone}` : '',
+      localColorText(st),
       ctx.market ? `Market: ${ctx.market}${st.market?.description ? ` — ${st.market.description}` : ''}` : '',
       `It is ${ctx.when.month} (${ctx.when.season}).${ctx.when.upcoming.length ? ` Coming up: ${ctx.when.upcoming.map((h) => `${h.name} on ${h.date}`).join(', ')}.` : ''}`,
       ctx.dayparts.length ? `Dayparts: ${ctx.dayparts.join('; ')}` : '',

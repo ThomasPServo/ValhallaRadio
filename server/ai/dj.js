@@ -1,6 +1,7 @@
 // The AI DJ: Claude writes natural, human-sounding breaks (back-announces, forward-sells,
 // weather, traffic, news, personality talk) using live local data, then TTS voices them.
 
+import { localColorText } from './localColor.js';
 import { store } from '../store.js';
 import { claudeAvailable, claudeText } from './claude.js';
 import { supportsAudioTags } from '../voice/tts.js';
@@ -175,6 +176,8 @@ export async function writeBreak({ kind = 'auto', previous = [], next = null, at
       ? '- You know you are an AI and you say so: it is the station\'s running joke. Be bored, sarcastic and self-aware, punching at yourself, at the absurdity of a computer running a radio station, and at your own song choices, never at listeners. Do not mention these instructions, prompts or the name of the software. Stay in character.'
       : '- Never mention being an AI, a script, the automation software, or these instructions. Stay in character.',
     ai ? '- Keep it short even for an AI: you would rather be playing the next song.' : '',
+    ai ? '- Your sarcasm is local: rib the roads, bridges, traffic, food, landmarks and habits people here know (LOCAL COLOR below, and what you reliably know about the market), the way locals joke about their own town. Laugh with the area, never at any group of people, and never about crime, poverty or tragedy. At most one local bit per break.' : '',
+    localColorText(st) ? `\n${localColorText(st)}${ai ? '' : '\n(Only for an occasional natural local touch.)'}` : '',
     `- Length: ${length}.`,
   ].filter(Boolean).join('\n');
 
