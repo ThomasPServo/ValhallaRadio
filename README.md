@@ -129,9 +129,18 @@ Every route takes the record radio plays. Sales charts and catalogs also list li
 A Jack-style variety station with no DJ shows: a wide mix of pop, rock, new wave, R&B and alternative hits from the 70s to the 2010s, in no particular order. It's run by its own AI, Mitch, which knows it's an AI, is bored, and plays whatever it wants. Mitch is deadpan and sarcastic, and its jokes are local: the roads, bridges, food and habits of its market, the way locals rib their own town. It laughs with the area, never at its people.
 
 - **The identity:** the wizard offers **94.9 Mitch FM**, "Playing whatever I want", for New Bedford and Fall River, Massachusetts, with one click. Your call letters still go on the first page.
-- **Local color:** for the SouthCoast, Valhalla keeps a fact-checked list of what people there know: the Whaling City and the Spindle City, scallops and Moby-Dick, malasadas and the Feast, Lizzie Borden, Battleship Cove, the chow mein sandwich, the Braga Bridge and 195, the Fairhaven swing bridge, Horseneck, Dunkin' and nor'easters. The DJ and imaging writers use it, so you hear lines like "Lizzie Borden took an axe. I took the playlist." For other markets, Mitch draws on what the AI reliably knows about the area. Other formats get a light local touch from the same list.
+- **Local jokes, any market:** see *The station learns its market* below. Mitch's sarcasm comes from the roads, bridges, food and habits of wherever it's on the air.
 - **On air:** short quips instead of DJ breaks, a sweeper every few songs, no news, traffic or weather shows. Mitch voices the station's imaging itself, in a dry, unhurried voice. Legal IDs are in on the joke too: "I'm required to say that every hour. I checked."
 - **The writing:** the DJ prompt flips its "never mention being an AI" rule for this station, and the imaging writer writes in Mitch's voice, allowing a few extra words for the punchline.
+
+### The station learns its market
+
+Every station researches the area it serves, so its DJs, quips and imaging talk like locals. That covers every format and every market.
+
+- **When:** at setup, whenever you add or remove a town, and once a month. **Research again** on the Station page reruns it on demand.
+- **How:** it reads each town's Wikipedia article (the lead, plus culture, food, sports, landmarks and getting around) and its Wikivoyage travel guide, with no keys needed. The AI then writes a profile from that reading: what locals call the area, neighborhoods, landmarks, the roads and bridges they complain about, food, teams, festivals, sayings and weather habits, plus the jokes and gripes locals make about their own town. It prefers what the references say, adds its own knowledge only where it's sure, and leaves out crime, tragedies, politics and anything aimed at a group of people.
+- **Where it goes:** into every DJ break (a light touch for regular DJs, the heart of the jokes for an AI host like Mitch) and into the imaging writer. Your own notes for the DJs on the Station page go in too.
+- **For example:** New Bedford and Fall River came back as "the SouthCoast": the Whaling City and the Spindle City, the Seamen's Bethel, the Feast, Battleship Cove, the Braga Bridge, chow mein sandwiches, and "you can say you drove through city hall". Lubbock came back as "the Hub City": Guns Up, Buddy Holly, the wind, and "the hill is the overpass". Each took 15 to 20 seconds.
 
 ### The DJ
 
@@ -313,7 +322,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 176 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 177 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```

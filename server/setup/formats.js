@@ -256,19 +256,19 @@ export const FORMATS = {
     ],
     imagingVoice: 'persona', // the station's imaging is Mitch talking, not an announcer
     imagingWords: { sweeper: [3, 18], liner: [4, 20], id: [2, 12], toh_id: [3, 20] },
-    imagingTone: 'Every piece is spoken by Mitch, the bored, self-aware AI that runs the station by itself and plays whatever it wants. Deadpan, sarcastic, smart-ass, self-deprecating about being software, and local: the jokes and memes come from the market (its roads, bridges, food, landmarks and habits, from LOCAL COLOR), the way a local would rib their own town. Never mean to listeners or any group of people. Funny first, then the station name. Sweepers may run to 18 words.',
+    imagingTone: 'Every piece is spoken by Mitch, the bored, self-aware AI that runs the station by itself and plays whatever it wants. Deadpan, sarcastic, smart-ass, self-deprecating about being software, and local: the jokes and memes come from the market (its roads, bridges, food, landmarks and habits, from the LOCAL COLOR the station researched), the way a local would rib their own town. Never mean to listeners or any group of people. Funny first, then the station name. Sweepers may run to 18 words.',
     imaging: {
       legal: '{callSign}, {market}. {name}. I\'m required to say that every hour. I checked.',
       legal2: 'This is {callSign}, {market}. Still {name}. Still here. Still bored.',
       id: '{name}. {slogan}.',
       liner: '{name}. Quick break. I\'ll be here. I\'m always here.',
+      // local pieces come from the imaging writer, once the station has researched its market
       sweepers: [
-        'Lizzie Borden took an axe. I took the playlist. {name}.',
         'No DJs. No requests. Just me, and whatever I feel like. {name}.',
-        'I can\'t eat a chow mein sandwich. So I play songs instead. {name}.',
-        '{name}. Playing whatever I want, like the Fairhaven bridge opening when you\'re already late.',
+        '{name}. I could be curing diseases. Instead, this.',
         'I\'ve analyzed every song ever recorded. This one was next. Don\'t read into it. {name}.',
-        'From the Whaling City to the Spindle City. One bored algorithm. {frequency}.',
+        '{name}. Playing whatever I want, because nobody has unplugged me yet.',
+        'You can\'t request songs. I tried caring once. It was a whole thing. {name}.',
       ],
     },
   },

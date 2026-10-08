@@ -6,6 +6,17 @@ const ui = { feed: '', feedHtml: '', design: null, brief: '', install: [], aiTes
 
 // ------------------------------------------------------------------ station & market
 
+/** What the station has learned about its market, for the DJ, the quips and the imaging. */
+function localHtml(c) {
+  if (!c?.notes?.length) return `<span class="muted">The station hasn't researched its market yet.</span> <button data-action="research">Research my market</button>`;
+  const list = (xs) => `<ul style="margin:4px 0 8px 18px;padding:0">${xs.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
+  return `<details><summary>🧭 Knows <b>${esc(c.region)}</b> like a local: ${c.notes.length} facts, ${c.humor?.length || 0} local jokes
+    <span class="muted">· researched ${new Date(c.researchedAt).toLocaleDateString()} from ${c.sources?.length || 0} sources</span></summary>
+    ${list(c.notes)}${c.humor?.length ? `<b>What locals joke about</b>${list(c.humor)}` : ''}
+    <div class="muted">${esc((c.sources || []).join(' · '))}</div></details>
+    <button data-action="research" style="margin-top:6px">Research again</button>`;
+}
+
 function zonesHtml() {
   const z = state.B.marketZones || [];
   if (!z.length) return '<span class="muted small">Add a location to set the clock from your market.</span>';
@@ -64,6 +75,7 @@ export const station = {
           <span class="small muted">${esc(l.timezone || '')}</span><span class="spacer"></span>
           ${i ? `<button class="icon" data-action="primary" data-i="${i}" title="Make primary (sets the station clock in auto mode)">⭐</button>` : '<span class="small muted">primary</span>'}
           <button class="icon danger" data-action="delLocation" data-i="${i}">✕</button></div>`).join('') || '<div class="muted small">No locations yet.</div>'}</div>
+        <div class="small">${localHtml(st.market.local)}</div>
         <div class="grid cols-2" id="tzForm">
           ${select('timezoneMode', 'Station clock', st.timezoneMode || 'auto', [['auto', 'Follow the primary market location'], ['manual', 'Fixed time zone']])}
           <div><label>Time zone</label><input data-k="timezone" list="tzList" value="${esc(st.timezone)}" ${st.timezoneMode === 'manual' ? '' : 'readonly'}><datalist id="tzList">${zones.map((z) => `<option value="${z}">`).join('')}</datalist></div>
@@ -96,6 +108,7 @@ export const station = {
       try { state.B = await api('POST', '/api/station/logo', undefined, f); bus.emit('bootstrap', state.B); bus.emit('rerender'); toast('Logo updated'); } catch (e) { toast(e.message, true); }
     },
     addLocation: (b) => run(b, async () => { state.B = await api('POST', '/api/market/locations', { name: $('#locName').value }); bus.emit('rerender'); }, 'Location added'),
+    research: (b) => run(b, async () => { state.B = await api('POST', '/api/market/research'); bus.emit('rerender'); }, 'Market researched'),
     delLocation: async (b) => { state.B = await api('DELETE', `/api/market/locations/${b.dataset.i}`); bus.emit('rerender'); },
     primary: async (b) => { state.B = await api('POST', '/api/market/primary', { idx: Number(b.dataset.i) }); bus.emit('rerender'); toast('Primary location changed'); },
     feed: (b) => run(b, async () => {

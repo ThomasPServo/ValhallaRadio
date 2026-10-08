@@ -1,34 +1,123 @@
-// Local color: what people in a market actually know and joke about (roads, bridges, food, landmarks,
-// habits), so the AI's asides and imaging sound like they're from here. Curated and factual; for a market
-// that isn't listed, the AI draws on what it reliably knows about the place.
+// The station learns the market it serves. At setup, when the market changes and every month, it reads up on
+// each town (Wikipedia and Wikivoyage, keyless) and the AI writes a local knowledge profile from that reading
+// and what it reliably knows: nicknames, landmarks, roads, food, teams, events, sayings and the jokes locals
+// make about their own area. The DJ, the quips and the imaging writer all use it.
 import { store } from '../store.js';
+import { userAgent } from '../feeds/http.js';
+import { claudeAvailable, claudeJson, checkClaudeCode } from './claude.js';
 
-const REGIONS = [
-  {
-    name: 'the SouthCoast (New Bedford, Fall River and the towns around them)',
-    match: /\b(new bedford|fall river|dartmouth|fairhaven|acushnet|westport|somerset|swansea|freetown|mattapoisett|marion|rochester|wareham|seekonk|tiverton)\b/i,
-    notes: [
-      'People call the area the SouthCoast. New Bedford is the Whaling City; Fall River is the Spindle City, for its old granite textile mills.',
-      'New Bedford is the highest-earning commercial fishing port in the country, mostly on sea scallops. Moby-Dick opens in New Bedford: the Seamen\'s Bethel and the Whaling Museum are downtown.',
-      'Deep Portuguese, Azorean, Madeiran and Cape Verdean roots: malasadas, chouriço, linguiça, sweet bread, kale soup. New Bedford\'s Feast of the Blessed Sacrament every summer is the big Madeiran feast.',
-      'Fall River: Lizzie Borden (1892; the house is a bed and breakfast and museum now), Battleship Cove and the USS Massachusetts, the Braga Bridge carrying 195 over the Taunton River, and the chow mein sandwich.',
-      'The swing bridge between New Bedford and Fairhaven opens for boats and stops traffic on Route 6.',
-      'Roads people complain about: 195 through both cities and over the Braga, Route 24 to Boston, Route 140, Route 18 into downtown New Bedford, and summer Cape traffic heading through Wareham to the bridges.',
-      'Beaches: Horseneck in Westport, Fort Taber in New Bedford\'s South End.',
-      'New England habits: Dunkin\' on every corner, "wicked", Boston sports, nor\'easters, buying bread and milk before every storm.',
-    ],
-  },
-];
+const log = (...a) => console.log('[market]', ...a);
+const STALE = 30 * 86400_000;
+const WANTED = /culture|econom|sport|landmark|attraction|cuisine|food|eat|drink|neighbo|transport|get around|festival|event|arts|music|media|nickname|tourism|recreation|see|do\b|understand|parks|geography|climate|education|notable/i;
+let running = null;
 
-/** Local color for the station's market, or null when there's none on file. */
-export function localColor(st = store.station) {
-  const where = [st.market?.name, ...(st.market?.locations || []).map((l) => l.name)].filter(Boolean).join('; ');
-  const r = REGIONS.find((x) => x.match.test(where));
-  return r ? { region: r.name, notes: r.notes } : null;
+const marketKey = (st) => (st.market?.locations || []).map((l) => l.name).sort().join('|');
+
+async function getJson(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': userAgent(), Accept: 'application/json' }, signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
-/** The same, as prompt lines. */
+/** The parts of an article worth knowing as a local: its lead, plus culture, food, sports, landmarks, getting around. */
+export function pickSections(text, max = 7000) {
+  const parts = String(text || '').split(/\n(?===+ [^=\n]+ =+)/);
+  const lead = parts.shift() || '';
+  const keep = parts.filter((p) => WANTED.test(/^=+ ([^=\n]+) =+/.exec(p)?.[1] || '')).map((p) => p.slice(0, 1200));
+  return [lead.slice(0, 1800), ...keep].join('\n').replace(/\n{3,}/g, '\n\n').slice(0, max);
+}
+
+/** What open references say about a place: its Wikipedia article and its Wikivoyage travel guide. */
+export async function readAbout(loc) {
+  const name = String(loc.name || '').replace(/,\s*(US|USA|United States)$/i, '');
+  const out = [];
+  for (const site of ['en.wikipedia.org', 'en.wikivoyage.org']) {
+    try {
+      const s = await getJson(`https://${site}/w/api.php?action=query&list=search&format=json&srlimit=1&srsearch=${encodeURIComponent(name)}`);
+      const hit = s.query?.search?.[0];
+      if (!hit) continue;
+      const p = await getJson(`https://${site}/w/api.php?action=query&prop=extracts&explaintext=1&format=json&redirects=1&titles=${encodeURIComponent(hit.title)}`);
+      const page = Object.values(p.query?.pages || {})[0];
+      if (page?.extract) out.push({ source: `${site.startsWith('en.wikivoyage') ? 'Wikivoyage' : 'Wikipedia'}: ${page.title}`, text: pickSections(page.extract) });
+    } catch { /* that reference is unavailable: go on with the rest */ }
+  }
+  return out;
+}
+
+const SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['region', 'notes', 'humor'],
+  properties: {
+    region: { type: 'string', description: 'What locals call the area, e.g. "the SouthCoast" or "Central Texas"' },
+    notes: { type: 'array', items: { type: 'string' }, description: '15-25 short facts a local would know' },
+    humor: { type: 'array', items: { type: 'string' }, description: '8-15 running jokes, gripes and in-jokes locals make about their own area' },
+  },
+};
+
+/**
+ * Research the station's market (once a month, or when its towns change, or with `force`). Returns the profile.
+ * `read` and `ai` can be replaced (tests).
+ */
+export async function researchMarket({ force = false, read = readAbout, ai } = {}) {
+  const st = store.station;
+  const locs = st.market?.locations || [];
+  if (!locs.length) return null;
+  const have = st.market.local;
+  if (!force && have && have.key === marketKey(st) && Date.now() - have.researchedAt < STALE) return have;
+  if (running) return running;
+  running = (async () => {
+    if (ai === undefined) { await checkClaudeCode().catch(() => {}); ai = claudeAvailable(); }
+    const sources = (await Promise.all(locs.slice(0, 4).map((l) => read(l).catch(() => [])))).flat();
+    const names = locs.map((l) => l.name.replace(/,\s*US$/, '')).join('; ');
+    let profile;
+    if (ai) {
+      profile = await claudeJson({
+        system: [
+          'You research a radio market so the station\'s on-air AI can talk like a local. From the reference text and what you reliably know,',
+          'write what people who live there know and say: what they call the area and its towns, neighborhoods, landmarks, bridges and roads',
+          '(and the traffic they complain about), local food and drink and the places for them, teams and rivalries, festivals and events,',
+          'history people are proud of, local sayings and pronunciations, weather habits, and the jokes and gripes locals make about their own area.',
+          'Rules: only things that are true and that locals would recognize; nothing about crime, tragedies, disasters with victims, politics or',
+          'religion; never a stereotype or a joke about any group of people. Humor is the affectionate kind locals use on their own town.',
+          'Prefer what the reference text says. Add your own knowledge only where you are sure it is true and current (people, businesses,',
+          'animals and events change); when in doubt, leave it out. An on-air mistake about someone\'s hometown is worse than a shorter list.',
+        ].join(' '),
+        prompt: [`Market: ${names}`, st.market?.description ? `The station's own notes: ${st.market.description}` : '', '', ...sources.map((s) => `--- ${s.source}\n${s.text}`)].filter(Boolean).join('\n'),
+        maxTokens: 4000, effort: 'medium', schema: SCHEMA,
+      });
+    } else {
+      // without an AI: the lead of each article, a sentence or two
+      profile = { region: names, notes: sources.filter((s) => s.source.startsWith('Wikipedia')).map((s) => s.text.split(/(?<=\.)\s/).slice(0, 2).join(' ')), humor: [] };
+    }
+    st.market.local = {
+      key: marketKey(st), region: String(profile.region || names).slice(0, 80),
+      notes: (profile.notes || []).map(String).filter(Boolean).slice(0, 25), humor: (profile.humor || []).map(String).filter(Boolean).slice(0, 15),
+      sources: sources.map((s) => s.source), researchedAt: Date.now(), by: ai ? 'ai' : 'references',
+    };
+    store.save();
+    log(`learned ${st.market.local.notes.length} facts and ${st.market.local.humor.length} local jokes about ${st.market.local.region} (${st.market.local.sources.length} sources)`);
+    return st.market.local;
+  })().catch((err) => { log('research failed:', err.message); return st.market.local || null; }).finally(() => { running = null; });
+  return running;
+}
+
+/** Research in progress, if any (the imaging writer waits for it). */
+export const researching = () => running;
+
+/** Re-research when the market changed or the profile is a month old (hourly check). */
+export function startMarketResearch() {
+  const check = () => { if (store.station.setupComplete) researchMarket().catch(() => {}); };
+  setTimeout(check, 60_000).unref();
+  setInterval(check, 3600_000).unref();
+}
+
+/** The market profile as prompt lines ('' when the station hasn't learned its market yet). */
 export function localColorText(st = store.station) {
-  const c = localColor(st);
-  return c ? `LOCAL COLOR for ${c.region} (facts; use them in your own words):\n${c.notes.map((n) => `- ${n}`).join('\n')}` : '';
+  const c = st.market?.local;
+  if (!c || c.key !== marketKey(st) || !c.notes?.length) return '';
+  return [
+    `LOCAL COLOR: what locals know about ${c.region} (researched; use it in your own words):`,
+    ...c.notes.map((n) => `- ${n}`),
+    c.humor?.length ? 'What locals joke and gripe about:' : '',
+    ...(c.humor || []).map((n) => `- ${n}`),
+  ].filter(Boolean).join('\n');
 }

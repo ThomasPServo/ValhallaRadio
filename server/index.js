@@ -19,6 +19,7 @@ import { designStation, applyDesign } from './ai/programmer.js';
 import { synthesize, ttsAvailable, activeProvider } from './voice/tts.js';
 import { kokoroStatus, installKokoro, installEvents, KOKORO_VOICES } from './voice/kokoro.js';
 import { produceElement, prerenderIds } from './audio/production.js';
+import { researchMarket, startMarketResearch } from './ai/localColor.js';
 import { PRESETS, resolveParams } from './audio/processor.js';
 import { analyzeTrack, trackDetail } from './audio/trackAnalyzer.js';
 import { formatList } from './setup/formats.js';
@@ -181,6 +182,7 @@ app.post('/api/setup', wrap(async (req, res) => {
   store.save();
   bedFile(chosenBedId()).then(() => engine.running && engine.reloadBed()).catch(() => {}); // the format's bed, rendered ahead of time
   prerenderIds().catch(() => {}); // the station's IDs too: the first thing it airs is one of them
+  researchMarket({ force: true }).catch(() => {}); // learn the market: the DJ and the imaging talk like locals
   for (const k of [...scheduler.logs.keys()]) if (!scheduler.logs.get(k).items.some((i) => i.status === 'playing')) scheduler.logs.delete(k);
   const job = buildLibrary(formatId);
   let early = false; // on air before the whole library was in
@@ -502,14 +504,20 @@ app.post('/api/market/locations', wrap(async (req, res) => {
   store.data.station.market.locations.push(g);
   applyMarketTimezone(store.data.station); // the station clock follows the primary market location
   store.save();
+  researchMarket().catch(() => {}); // a new town to learn about
   res.json(bootstrap());
 }));
 app.delete('/api/market/locations/:idx', (req, res) => {
   store.data.station.market.locations.splice(Number(req.params.idx), 1);
   applyMarketTimezone(store.data.station);
   store.save();
+  researchMarket().catch(() => {});
   res.json(bootstrap());
 });
+app.post('/api/market/research', wrap(async (req, res) => {
+  await researchMarket({ force: true });
+  res.json(bootstrap());
+}));
 app.post('/api/market/primary', (req, res) => {
   const locs = store.data.station.market.locations;
   const i = Number(req.body.idx);
@@ -712,6 +720,7 @@ setInterval(() => { if (engine.running && engine.watchers.level) broadcast('leve
 { const fixed = library.repairYears(); if (fixed) console.log(`[library] corrected the year of ${fixed} song(s) released on compilations`); }
 if (store.station.setupComplete) bedFile(chosenBedId()).catch((err) => console.warn('[bed]', err.message)); // render the bed in the background
 const imagingCheck = startAutoImaging();
+startMarketResearch();
 mono.startCacheWarmer(() => library.playable()); // fill the cache with the library while nothing urgent is fetching
 startJanitor(() => scheduler.allItems()); // delete files nothing needs any more
 startChartWatch(); // this station's charts: chart positions, peaks and chart-driven rotation

@@ -5,7 +5,7 @@ import { store } from '../server/store.js';
 import { applyFormat } from '../server/setup/setup.js';
 import { FORMATS, formatList } from '../server/setup/formats.js';
 import { vetPiece } from '../server/ai/imagingWriter.js';
-import { localColor } from '../server/ai/localColor.js';
+import { researchMarket, localColorText, pickSections } from '../server/ai/localColor.js';
 
 test('every format has what setup needs', () => {
   for (const [id, f] of Object.entries(FORMATS)) {
@@ -35,9 +35,26 @@ test('Adult Hits: the station is run by its own bored AI, who voices the imaging
   } finally { Object.assign(store.data, saved); }
 });
 
-test('local color: the SouthCoast is known by its towns; elsewhere there is none on file', () => {
-  const st = (names) => ({ market: { locations: names.map((name) => ({ name })) } });
-  assert.match(localColor(st(['New Bedford, Massachusetts', 'Fall River, Massachusetts'])).region, /SouthCoast/);
-  assert.match(localColor(st(['Dartmouth, Massachusetts'])).notes.join(' '), /Braga Bridge/);
-  assert.equal(localColor(st(['Austin, Texas'])), null);
+test('the station researches its market and the prompts use what it learned', async () => {
+  const saved = JSON.parse(JSON.stringify(store.data.station));
+  try {
+    store.data.station.market = { name: '', description: '', locations: [{ name: 'Fall River, Massachusetts, US' }] };
+    assert.equal(localColorText(), '', 'nothing learned yet');
+    const read = async (loc) => [{ source: `Wikipedia: ${loc.name}`, text: 'Fall River is a city in Bristol County. It is known as the Spindle City.' }];
+    const profile = await researchMarket({ read, ai: false });
+    assert.deepEqual(profile.sources, ['Wikipedia: Fall River, Massachusetts, US']);
+    assert.match(localColorText(), /Spindle City/);
+    assert.equal(await researchMarket({ read: async () => { throw new Error('should not re-read'); }, ai: false }), store.data.station.market.local, 'fresh: kept for a month');
+    store.data.station.market.locations.push({ name: 'Austin, Texas, US' });
+    assert.equal(localColorText(), '', 'the market changed: the old profile no longer applies');
+  } finally { store.data.station = saved; }
+});
+
+test('reading up on a town keeps the lead and the sections a local would know', () => {
+  const text = 'Lead about the town.\n== History ==\nOld stuff.\n== Culture ==\nThe feast every summer.\n== Government ==\nCouncil.\n== Sports ==\nThe team.';
+  const out = pickSections(text);
+  assert.match(out, /Lead about the town/);
+  assert.match(out, /The feast every summer/);
+  assert.match(out, /The team/);
+  assert.doesNotMatch(out, /Council/);
 });

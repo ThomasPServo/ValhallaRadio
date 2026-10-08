@@ -7,7 +7,7 @@ import { store } from '../store.js';
 import { claudeAvailable, claudeJson, checkClaudeCode } from './claude.js';
 import { zoned } from '../util/time.js';
 import { FORMATS } from '../setup/formats.js';
-import { localColorText } from './localColor.js';
+import { localColorText, researching } from './localColor.js';
 
 export const FX_CHOICES = ['punch', 'riser', 'smooth', 'stutter', 'music', 'dry'];
 export const PLACEHOLDERS = ['name', 'frequency', 'callSign', 'market', 'slogan', 'website'];
@@ -255,6 +255,7 @@ export function templatePieces(ctx, mix) {
  * @returns {Promise<{pieces: object[], rejected: {text:string, why:string}[], source: 'claude'|'templates'}>}
  */
 export async function writeImaging({ count = 6, guidance = '' } = {}) {
+  await researching()?.catch(() => {}); // local pieces want what the station is still learning about its market
   const ctx = context();
   const mix = planMix(count, ctx.station);
   let raw = [];
