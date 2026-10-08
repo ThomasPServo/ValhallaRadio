@@ -206,6 +206,38 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 - Top-of-hour sync keeps the legal ID within seconds of :00. Overrunning hours drop music, not spots, and short hours get filler.
 - Dead-air protection falls back to emergency audio.
 
+### Light on the machine
+
+Valhalla runs a station around the clock, so it does as little as it can:
+
+- **Audio chain.** The processor's meter-only work (input loudness, true-peak readout, spectrum, goniometer, correlation) runs only while a screen shows the meters. The audio is bit-identical either way. True-peak oversampling is skipped whenever the samples prove no inter-sample peak can come near the limit.
+- **Songs in memory.** A song from the cache whose ending is already known holds 15 seconds of decoded audio and no decoder process while it waits for air. It picks up sample-exact when it starts. Background analysis keeps only a song's opening and its last 75 seconds in memory, and each song is decoded once for both its analysis and its waveform. Songs in the log are analysed ahead of the rest of the library.
+- **Scheduling.** Recent plays are indexed once, so building a log from a library of thousands takes milliseconds.
+- **Disk.** Saves are compact and written at most once a second, in the background; changes are flushed on shutdown. The music cache is tracked in memory instead of being scanned every few seconds.
+- **Network.**
+  - Library listings are slim and gzipped.
+  - The studio's own files are served compressed once, with cache validation.
+  - Listeners get the stream in 100 ms batches.
+  - Live feeds (meters, spectrum, timeline, decoder status, levels) go only to screens that show them; a tab in the background gets none.
+- **Browser.**
+  - Waveforms, timeline strips and the clock face are drawn once and reused.
+  - Text and bars change only when their values do.
+  - Meters redraw at 30 fps, and the gain-reduction bars and the ON AIR glow animate without repainting the page.
+  - The library renders 150 rows at a time as you scroll.
+
+Measured on a 4-core machine running the same station, against the earlier version:
+
+| | Earlier version | Now |
+|---|---|---|
+| CPU on air, no screens open, 2 listeners | 10.9% of a core | 5.6% |
+| CPU on air with the studio open | 10.2% | 7.7% |
+| CPU with 50 listeners | 13.5% | 7.0% |
+| Memory on air (server and ffmpeg) | 259 MB | 166 MB |
+| Live data to an open studio page | 40 KB/s | 11 KB/s |
+| Building 2 hours of log from 3,000 songs | 8.6 s | 32 ms |
+| Library listing of 3,000 songs | 3.7 MB | 61 KB |
+| Browser work per second on the studio page | 254 ms | 107 ms |
+
 ---
 
 ## The studio

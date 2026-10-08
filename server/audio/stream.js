@@ -78,9 +78,11 @@ export class StreamDecoder extends EventEmitter {
     this.proc.stderr.on('data', (d) => { err += d; if (err.length > 4000) err = err.slice(-2000); });
     this.proc.stdout.on('data', (c) => this._onPcm(c));
     this.proc.on('error', (e) => this._fail(e));
+    const from = this.decoded; // more than this means this run delivered audio
     this.proc.on('close', (code) => {
       if (this.closed) return;
-      if (code === 0 || this.decoded > SR * 5) {
+      if (code !== 0 && from > 0 && this.decoded <= from) this._fail(new Error(`decoder restart failed (${code}): ${err.trim().split('\n').pop() || 'no audio'}`));
+      else if (code === 0 || this.decoded > SR * 5) {
         this._finish();
       } else this._fail(new Error(`decoder exited (${code}): ${err.trim().split('\n').pop() || 'no audio'}`));
     });

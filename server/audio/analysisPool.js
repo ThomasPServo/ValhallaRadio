@@ -1,35 +1,51 @@
-// Tiny job queue in front of a single analysis worker thread.
+// Tiny job queue in front of a single analysis worker thread. The worker (a whole JavaScript engine,
+// ~15 MB) is started when there's work and retired after a couple of idle minutes: songs arrive a few
+// an hour, so most of the time there's nothing for it to do.
 import { Worker } from 'node:worker_threads';
 
+const IDLE_MS = 120_000;
 let worker = null;
 let seq = 0;
+let idleTimer = null;
 const pending = new Map();
 
+function retireWhenIdle() {
+  clearTimeout(idleTimer);
+  if (pending.size) return;
+  idleTimer = setTimeout(() => { if (!pending.size && worker) { const w = worker; worker = null; w.terminate(); } }, IDLE_MS);
+  idleTimer.unref?.();
+}
+
 function getWorker() {
+  clearTimeout(idleTimer);
   if (worker) return worker;
-  worker = new Worker(new URL('./analysisWorker.js', import.meta.url));
-  worker.unref();
-  worker.on('message', ({ id, result, error }) => {
+  const w = new Worker(new URL('./analysisWorker.js', import.meta.url));
+  worker = w;
+  w.unref();
+  w.on('message', ({ id, result, error }) => {
     const p = pending.get(id);
     if (!p) return;
     pending.delete(id);
     if (error) p.reject(new Error(error)); else p.resolve(result);
+    retireWhenIdle();
   });
-  worker.on('error', (err) => {
+  w.on('error', (err) => {
     for (const p of pending.values()) p.reject(err);
     pending.clear();
-    worker = null;
+    if (worker === w) worker = null;
   });
-  return worker;
+  return w;
 }
 
 /**
- * Run an analysis command on a copy of the PCM (the copy's buffer is transferred, not cloned).
+ * Run an analysis command on the PCM. The worker gets a copy, or with `{ handOver: true }` the caller's
+ * own buffer (when the PCM spans all of it), which the caller must not use afterwards.
  * @param {'head'|'tail'|'loudness'|'peaks'} cmd
  * @param {Int16Array} pcm
  */
-export function analyze(cmd, pcm, opts = {}) {
-  const copy = pcm.slice();
+export function analyze(cmd, pcm, opts = {}, { handOver = false } = {}) {
+  const whole = pcm.byteOffset === 0 && pcm.byteLength === pcm.buffer.byteLength;
+  const copy = handOver && whole ? pcm : pcm.slice();
   const id = ++seq;
   return new Promise((resolve, reject) => {
     pending.set(id, { resolve, reject });

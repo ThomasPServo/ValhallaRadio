@@ -72,9 +72,9 @@ export function analyzeTrack(id) {
       fs.renameSync(`${peaksFile(id)}.tmp`, peaksFile(id));
       const end = d.decoded;
       const loudness = d.loudness();
-      const head = await analyze('head', d.range(0, Math.round(HEAD_SEC * SR)), { refLoudness: loudness });
+      const head = await analyze('head', d.range(0, Math.round(HEAD_SEC * SR)), { refLoudness: loudness }, { handOver: true });
       const from = Math.max(0, end - Math.round(TAIL_SEC * SR));
-      const tail = await analyze('tail', d.range(from, end), { offsetSec: from / SR, refLoudness: loudness });
+      const tail = await analyze('tail', d.range(from, end), { offsetSec: from / SR, refLoudness: loudness }, { handOver: true });
       const lyrics = await lookupVocalTiming({ title: t.title, artist: t.artist, album: t.album, duration: end / SR });
       const analysis = {
         v: 2, analyzedAt: Date.now(), duration: end / SR, loudness: Math.round(loudness * 10) / 10,

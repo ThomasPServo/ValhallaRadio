@@ -605,7 +605,7 @@ export class Playout extends EventEmitter {
       decoder.close();
       throw err;
     }
-    const head = cached ? null : await analyze('head', decoder.range(0, Math.round(HEAD_SEC * SR)));
+    const head = cached ? null : await analyze('head', decoder.range(0, Math.round(HEAD_SEC * SR)), {}, { handOver: true });
     const lyrics = await Promise.race([lyricsP, sleep(4000).then(() => null)]);
     const markers = this.musicMarkers(track, cached, head, lyrics);
     const prep = { kind: 'music', decoder, markers, gain: this.musicGain(markers.loudness), trackId: track.id };
@@ -692,7 +692,7 @@ export class Playout extends EventEmitter {
     const pcm = d.range(from, end);
     if (!pcm) return;
     const loudness = d.loudness();
-    const tail = await analyze('tail', pcm, { offsetSec: from / SR, refLoudness: loudness });
+    const tail = await analyze('tail', pcm, { offsetSec: from / SR, refLoudness: loudness }, { handOver: true });
     const m = prep.markers;
     Object.assign(m, {
       endSec: tail.endSec, endType: track.markers?.endType || tail.endType, mixOut: track.markers?.mixOut ?? tail.mixOut,

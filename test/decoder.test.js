@@ -8,6 +8,7 @@ import { execFileSync } from 'node:child_process';
 import './helpers.js';
 import { FFMPEG } from '../server/config.js';
 import { StreamDecoder, SR } from '../server/audio/stream.js';
+import { analyze } from '../server/audio/analysisPool.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let file; let ref;
@@ -30,7 +31,8 @@ async function play(d, from) {
   const out = [];
   const buf = new Float32Array(512);
   while (!(d.ended && d.readPos >= d.decoded)) {
-    if (d.aheadFrames() < 256 && !d.ended) { await sleep(2); continue; } // the test waits; air would not need to
+    if (d.aheadFrames() < 256 && !d.ended && !d.error) { await sleep(2); continue; } // the test waits; air would not need to
+    if (d.error && d.aheadFrames() <= 0) break;
     buf.fill(0);
     const got = d.mixInto(buf, 0, 256, 1, 1);
     for (let i = 0; i < got * 2; i++) out.push(buf[i]);
@@ -72,4 +74,28 @@ test('analysis decoding holds only the head and the tail, with loudness and wave
   assert.equal(d.loudness(), ref.loudness);
   assert.deepEqual(Array.from(d.peaksArray()), ref.peaks);
   d.close();
+});
+
+test('a released song whose file has gone reports an error instead of quietly ending early', async () => {
+  const copy = path.join(path.dirname(file), 'gone.mp3');
+  fs.copyFileSync(file, copy);
+  const d = new StreamDecoder({ file: copy, maxAheadSec: 5, keepBehindSec: 1, analyse: false, releaseWhenIdle: true }).start();
+  while (!d.released) await sleep(5);
+  fs.rmSync(copy);
+  let ended = false; let error = null;
+  d.on('end', () => { ended = true; }); d.on('error', (e) => { error = e; });
+  await play(d, 0);
+  assert.ok(error && /restart failed/.test(error.message), `error: ${error?.message}`);
+  assert.equal(ended, false);
+  d.close();
+});
+
+test('analysis can take over a fresh buffer instead of copying it', async () => {
+  const head = ref.slice(0, 20 * SR * 2);
+  const copied = await analyze('head', head.subarray(0, 10 * SR * 2), {}, { handOver: true }); // part of a buffer: copied
+  assert.equal(head.length, 20 * SR * 2, 'a partial view is copied, the caller keeps its buffer');
+  const own = head.slice(0, 10 * SR * 2);
+  const taken = await analyze('head', own, {}, { handOver: true });
+  assert.equal(own.length, 0, 'handed over: the caller no longer has it');
+  assert.deepEqual(taken, copied, 'same result either way');
 });
