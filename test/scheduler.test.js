@@ -103,3 +103,51 @@ test('contextFor finds the songs around a DJ break and detects a stopset', () =>
   assert.equal(ctx.next.title, 'Two');
   assert.equal(ctx.afterStopset, true);
 });
+
+/** A scheduler whose hour plans come from `plan(startMs)`, held back until `open(key)` for the keys in `slow`. */
+function slowPlanner(plan, slow = []) {
+  const s = new Scheduler();
+  const gates = new Map(slow.map((k) => { let open; const p = new Promise((r) => { open = r; }); return [k, { p, open }]; }));
+  const seen = [];
+  s.generateHour = async (startMs, opts = {}) => {
+    const k = key(startMs);
+    seen.push({ key: k, planned: s.allItems().filter((i) => i.trackId).map((i) => i.trackId) });
+    if (gates.has(k)) await gates.get(k).p;
+    return { hourKey: k, startMs, clockName: 'Music Hour', items: plan(startMs, opts) };
+  };
+  return { s, open: (k) => gates.get(k).open(), seen };
+}
+const song = (id, hourMs, trackId) => item(id, 'music', hourMs, 'scheduled', { trackId, artist: trackId });
+
+test('a stopgap airs while the hour is still being planned; the plan keeps what aired and does not repeat it', async () => {
+  store.data.library = [{ id: 'f1', title: 'Filler', artist: 'Band', category: 'A', duration: 200 }];
+  const { s, open, seen } = slowPlanner((start) => (start === T0
+    ? [song('p1', T0, 'f1'), song('p2', T0, 'x2'), song('p3', T0, 'x3')]
+    : [song('n1', T0 + H, 'x4')]), [key(T0)]);
+  const now = T0 + 20 * 60_000;
+  const first = s.ensure(now); // planning the hour takes a while (an AI music director)
+  const r = s.next(now); // meanwhile the station needs audio
+  assert.equal(r.wait.trackId, 'f1', 'filler music from the library');
+  assert.equal(s.logs.get(key(T0)).stopgap, true);
+  r.wait.status = 'playing';
+  const second = s.ensure(now + 30_000); // the next check must not take the stopgap for the planned hour
+  await new Promise((res) => setTimeout(res, 20));
+  assert.deepEqual(seen.map((x) => x.key), [key(T0)], 'the next hour waits for this one');
+  open(key(T0));
+  await Promise.all([first, second]);
+  const l = s.logs.get(key(T0));
+  assert.equal(l.stopgap, undefined, 'the real plan replaced the stopgap');
+  assert.deepEqual(l.items.map((i) => i.id), [r.wait.id, 'p2', 'p3'], 'the song on air stays first and is not played again');
+  assert.deepEqual(seen.find((x) => x.key === key(T0 + H)).planned.sort(), ['f1', 'x2', 'x3'], "the next hour's rotation saw this hour's picks");
+});
+
+test('planning an hour again keeps what aired, is on air or is cued, and drops the rest of the old plan', async () => {
+  const { s } = slowPlanner(() => [song('n1', T0, 'b'), song('n2', T0, 'x'), song('n3', T0, 'y')]);
+  s.logs.set(key(T0), { hourKey: key(T0), startMs: T0, clockName: 'Music Hour', items: [
+    song('o1', T0, 'a'), song('o2', T0, 'b'), song('o3', T0, 'c'), song('o4', T0, 'd'),
+  ] });
+  const [o1, o2, o3] = s.logs.get(key(T0)).items;
+  o1.status = 'played'; o2.status = 'playing'; o3.status = 'cued';
+  await s.regenerate(key(T0));
+  assert.deepEqual(s.logs.get(key(T0)).items.map((i) => i.id), ['o1', 'o2', 'o3', 'n2', 'n3'], "'b' is on air, so the new plan's 'b' goes");
+});

@@ -59,6 +59,9 @@ test('Qobuz tracks become Valhalla tracks', () => {
   assert.equal(arcod.cleanTitle('Africa (Album Version)'), 'Africa');
   assert.equal(arcod.cleanTitle('Layla - 2011 Remastered'), 'Layla');
   assert.equal(arcod.cleanTitle('Shout (Radio Edit)'), 'Shout (Radio Edit)', 'an edit is a different record');
+  assert.equal(arcod.cleanTitle('Dance The Night (From Barbie The Album)'), 'Dance The Night', 'soundtrack labels go');
+  assert.equal(arcod.cleanTitle('What Was I Made For? [From The Motion Picture "Barbie"]'), 'What Was I Made For?');
+  assert.equal(arcod.cleanTitle('Letter (From a Friend)'), 'Letter (From a Friend)', 'but not words that are part of the name');
   assert.equal(t.artist, 'Megadeth, Guest');
   assert.equal(t.album, 'Rust In Peace');
   assert.equal(t.albumId, 'qz-0060254789932');

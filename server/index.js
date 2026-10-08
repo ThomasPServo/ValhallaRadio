@@ -182,10 +182,24 @@ app.post('/api/setup', wrap(async (req, res) => {
   bedFile(chosenBedId()).then(() => engine.running && engine.reloadBed()).catch(() => {}); // the format's bed, rendered ahead of time
   for (const k of [...scheduler.logs.keys()]) if (!scheduler.logs.get(k).items.some((i) => i.status === 'playing')) scheduler.logs.delete(k);
   const job = buildLibrary(formatId);
+  let early = false; // on air before the whole library was in
   if (startOnAir) {
-    const go = () => { if (store.data.library.length >= 15 && !engine.running && ffmpegVersion) engine.start(); };
+    // on air once there's variety for a proper first hour (a dozen artists), or when the build is done
+    const go = (p) => {
+      const artists = new Set(store.data.library.map((t) => String(t.artist).split(/,|\s+(?:feat\.?|ft\.|&|x)\s+/i)[0].trim().toLowerCase())).size;
+      const ready = store.data.library.length >= 15 && (artists >= 12 || p.done);
+      if (ready && !engine.running && ffmpegVersion) { early = !p.done; engine.start(); }
+      if (ready || p.done) setupEvents.off('progress', go);
+    };
     setupEvents.on('progress', go);
   }
+  // hours planned while the library was still coming in are planned again from all of it
+  const replan = (p) => {
+    if (!p.done) return;
+    setupEvents.off('progress', replan);
+    if (early && engine.running) scheduler.replanAhead().catch((err) => console.warn('[setup] re-plan', err.message));
+  };
+  setupEvents.on('progress', replan);
   res.json({ ...bootstrap(), job });
 }));
 

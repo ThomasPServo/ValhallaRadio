@@ -91,27 +91,51 @@ export class Scheduler {
     for (const [k, l] of this.logs) if (l.startMs < cur - 3600_000) this.logs.delete(k);
   }
 
+  /**
+   * The hour's log, planning it if needed. An hour being planned is waited for (so the next hour's rotation
+   * sees its picks), and a stopgap of filler music counts as not planned. `replace` plans the hour again.
+   */
   ensureHour(startMs, opts = {}) {
     const key = hourKey(new Date(startMs), this.tz());
-    if (this.logs.has(key)) return Promise.resolve(this.logs.get(key));
     if (this.generating.has(key)) return this.generating.get(key);
+    const have = this.logs.get(key);
+    if (have && !have.stopgap && !opts.replace) return Promise.resolve(have);
     const job = this.generateHour(startMs, opts)
-      .then((l) => { this.logs.set(key, l); this.onChange(); return l; })
+      .then((l) => {
+        // what has aired, is on air or is committed from the version being replaced stays, and isn't repeated
+        const prev = this.logs.get(key);
+        if (prev) {
+          const keep = prev.items.filter((i) => ['playing', 'played', 'cued'].includes(i.status));
+          const kept = new Set(keep.filter((i) => i.trackId).map((i) => String(i.trackId)));
+          l.items = [...keep, ...l.items.filter((i) => !(i.trackId && kept.has(String(i.trackId))))];
+        }
+        this.logs.set(key, l); this.onChange(); return l;
+      })
       .catch((err) => { log('generate failed', key, err); throw err; })
       .finally(() => this.generating.delete(key));
     this.generating.set(key, job);
     return job;
   }
 
+  /** Plan an hour again (what has aired or is committed stays; the old plan keeps airing until the new one is ready). */
   async regenerate(key) {
     const l = this.logs.get(key);
     if (!l) return null;
-    this.logs.delete(key);
     const now = Date.now();
-    return this.ensureHour(l.startMs, { fromMs: now > l.startMs ? now : undefined });
+    return this.ensureHour(l.startMs, { fromMs: now > l.startMs ? now : undefined, replace: true });
   }
 
-  async generateHour(startMs, { fromMs } = {}) {
+  /** Plan the current and next hour again, e.g. once the library has grown a lot since they were planned. */
+  async replanAhead(now = Date.now()) {
+    const cur = hourStart(new Date(now), this.tz());
+    for (const start of [cur, cur + 3600_000]) {
+      const key = hourKey(new Date(start), this.tz());
+      if (this.logs.has(key) || this.generating.has(key)) await this.ensureHour(start, { fromMs: start < now ? now : undefined, replace: true });
+    }
+  }
+
+  async generateHour(startMs, opts = {}) {
+    const { fromMs } = opts;
     const tz = this.tz();
     const z = zoned(new Date(startMs), tz);
     const key = hourKey(new Date(startMs), tz);
@@ -180,7 +204,7 @@ export class Scheduler {
     }
     if (skipBefore > 0) {
       items.splice(0, skipBefore);
-      const id = pickImaging('id');
+      const id = opts.replace ? null : pickImaging('id'); // joining the hour mid-way opens with an ID (a re-plan doesn't)
       if (id) items.unshift(this.imagingItem(id, base, 'id'));
     }
     // recompute estimates with real durations
@@ -294,7 +318,8 @@ export class Scheduler {
       const t = candidatesFor(library.playable(), { at: now, plays, rotation: store.data.rotation, category }, 10).find((x) => !usedIds.has(x.id));
       if (t) {
         const it = { id: uid('it_'), hourKey: curKey, status: 'scheduled', type: 'music', category: catId, ...trackFields(t), why: 'filler', filler: true };
-        if (l) l.items.push(it); else this.logs.set(curKey, { hourKey: curKey, startMs: hourStart(new Date(now), this.tz()), clockName: 'Filler', items: [it] });
+        // with no plan for the hour yet (it's still being made), a stopgap log airs until it arrives
+        if (l) l.items.push(it); else this.logs.set(curKey, { hourKey: curKey, startMs: hourStart(new Date(now), this.tz()), clockName: 'Filler', stopgap: true, items: [it] });
         this.onChange();
         return it;
       }

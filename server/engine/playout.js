@@ -50,6 +50,7 @@ export class Playout extends EventEmitter {
     this.anchor = null;
     this.cue = null;
     this.preparing = new Set();
+    this.prepared = new Set(); // items holding prepared audio (released when they air, leave the lookahead or the log)
     this.overlayDuck = 1;
     this.deadAir = 0;
     this.lastError = null;
@@ -104,7 +105,7 @@ export class Playout extends EventEmitter {
       s.release();
     }
     if (this.cue) { this.cue.item.status = 'ready'; this.cue = null; }
-    for (const it of this.scheduler.allItems()) this.releasePrep(it);
+    for (const it of [...this.prepared, ...this.scheduler.allItems()]) this.releasePrep(it);
     this.sources = [];
     this.anchor = null;
     this.bed = null;
@@ -389,6 +390,7 @@ export class Playout extends EventEmitter {
     this.sources.push(src);
     this.anchor = src;
     item.prep = null;
+    this.prepared.delete(item);
     item.status = 'playing';
     item.airedAt = this.startWall + (atFrame / SR) * 1000;
     item.audioDuration = src.len;
@@ -496,6 +498,10 @@ export class Playout extends EventEmitter {
     const upcoming = this.scheduler.upcoming((store.settings.lookaheadItems || 3) + 1);
     const keep = new Set(upcoming.map((i) => i.id));
     for (const it of this.scheduler.allItems()) if (!keep.has(it.id) && it.prep && it.status !== 'cued') this.releasePrep(it);
+    if (this.prepared.size) { // a re-plan can drop items that were already prepared
+      const inLog = new Set(this.scheduler.allItems());
+      for (const it of [...this.prepared]) if (!inLog.has(it) && this.cue?.item !== it) this.releasePrep(it);
+    }
     // songs and spoken elements prepare in separate lanes, so a slow voice render never holds up music
     const busy = { music: 0, other: 0 };
     for (const id of this.preparing) busy[this.scheduler.findItem(id)?.type === 'music' ? 'music' : 'other']++;
@@ -549,6 +555,7 @@ export class Playout extends EventEmitter {
   }
 
   releasePrep(it) {
+    this.prepared.delete(it);
     if (!it.prep) return;
     it.prep.decoder?.close();
     it.prep = null;
@@ -563,6 +570,7 @@ export class Playout extends EventEmitter {
       const prep = item.type === 'music' ? await this.prepareMusic(item) : await this.prepareElement(item);
       if (item.status !== 'preparing' || !this.running) { prep.decoder?.close(); return; } // removed or stopped meanwhile
       item.prep = prep;
+      this.prepared.add(item);
       item.audioDuration = prep.kind === 'music' ? (prep.markers.endSec || prep.markers.duration || item.duration) - (prep.markers.startSec || 0) : prep.audio.durationSec;
       item.markers = this.publicMarkers(prep);
       item.status = 'ready';
