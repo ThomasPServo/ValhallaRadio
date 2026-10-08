@@ -2,7 +2,7 @@ import './helpers.js';
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { store } from '../server/store.js';
-import { Scheduler } from '../server/scheduler/logs.js';
+import { Scheduler, estDuration } from '../server/scheduler/logs.js';
 
 const H = 3600_000;
 const T0 = Date.UTC(2026, 9, 3, 12); // 12:00 UTC
@@ -105,6 +105,65 @@ test('a song airs first while an ID is still being voiced (a new station signing
   assert.equal(s.next(T0 + 50 * 60_000, { urgent: true }).item.trackId, 't1', 'the song airs first');
   items[1].status = 'played'; items[0].status = 'ready';
   assert.equal(s.next(T0 + 54 * 60_000).item.id, 'id');
+});
+
+const songs = (len, n = 12) => ['A', 'B', 'C', 'G', 'N'].flatMap((c) => Array.from({ length: n }, (_, i) => ({ id: `${c}${i}`, title: `Song ${c}${i}`, artist: `Artist ${c}${i}`, category: c, duration: len })));
+const endOf = (s, now, l) => {
+  let t = now;
+  for (const i of s.allItems()) if (i.status === 'playing') t = Math.max(t, i.airedAt + estDuration(i) * 1000);
+  for (const i of l.items) if (['scheduled', 'preparing', 'ready', 'cued'].includes(i.status)) t += estDuration(i) * 1000;
+  return (t - l.startMs) / 1000;
+};
+
+test("an hour is planned full to the top, however short its clock runs at today's song lengths", async () => {
+  const saved = [store.settings.useClaudeForMusic, store.settings.allowDiscovery];
+  Object.assign(store.settings, { useClaudeForMusic: false, allowDiscovery: false });
+  try {
+    for (const len of [150, 184, 260]) {
+      store.data.library = songs(len);
+      const s = new Scheduler();
+      const l = await s.generateHour(T0);
+      const airtime = l.items.filter((i) => i.status !== 'failed').reduce((sum, i) => sum + estDuration(i), 0);
+      assert.ok(airtime >= 3600 - 90 && airtime <= 3600 + 90, `${len}s songs: the hour ends near the top (${airtime}s)`);
+      const positions = s.clockFor(T0).items.filter((i) => i.type === 'music').length;
+      if (len < 200) assert.ok(l.items.filter((i) => i.type === 'music').length > positions, 'more songs than the clock has positions');
+      assert.ok(l.items.every((i) => i.type !== 'music' || i.trackId), 'every song position has a song');
+    }
+  } finally { [store.settings.useClaudeForMusic, store.settings.allowDiscovery] = saved; }
+});
+
+test('the hour on air is topped up ahead of time when what is left of it would end early', () => {
+  store.data.library = songs(204);
+  const now = T0 + 40 * 60_000;
+  const l = { hourKey: key(T0), startMs: T0, clockId: store.data.clocks[0].id,
+    items: [item('p', 'music', T0, 'playing', { trackId: 'A0', duration: 214, airedAt: now - 60_000 }), item('a', 'music', T0, 'scheduled', { trackId: 'B0', duration: 204 }), item('dj', 'dj', T0, 'skipped')] };
+  const s = new Scheduler();
+  s.logs.set(l.hourKey, l);
+  assert.ok(endOf(s, now, l) < 3000, 'a skipped break and short songs: the hour would end ten minutes early');
+  const added = s.topUp(now);
+  assert.ok(added.length >= 3 && added.every((i) => i.status === 'scheduled' && i.trackId));
+  const end = endOf(s, now, l);
+  assert.ok(end >= 3600 - 90 && end <= 3600 + 90, `ends near the top (${end}s)`);
+  assert.equal(s.topUp(now).length, 0, 'full: nothing more');
+  const ids = l.items.filter((i) => i.trackId).map((i) => i.trackId);
+  assert.equal(new Set(ids).size, ids.length, 'no song twice');
+});
+
+test('an hour that would run a song past the top drops its last song while it is still unprepared', () => {
+  store.data.library = songs(204);
+  const now = T0 + 45 * 60_000;
+  const l = { hourKey: key(T0), startMs: T0, clockId: store.data.clocks[0].id,
+    items: [item('p', 'music', T0, 'playing', { trackId: 'A0', duration: 214, airedAt: now - 10_000 }),
+      ...['B0', 'C0', 'G0', 'N0', 'A1'].map((id) => item(`s${id}`, 'music', T0, 'scheduled', { trackId: id, duration: 204 }))] };
+  const s = new Scheduler();
+  s.logs.set(l.hourKey, l);
+  assert.ok(endOf(s, now, l) > 3600 + 90);
+  s.topUp(now);
+  assert.equal(l.items.at(-1).status, 'dropped');
+  s.topUp(now);
+  assert.equal(l.items.filter((i) => i.status === 'dropped').length, 1, 'one song was enough');
+  const end = endOf(s, now, l);
+  assert.ok(end >= 3600 - 90 && end <= 3600 + 90, `ends near the top (${end}s)`);
 });
 
 test('selectSpots honours flights, dayparts, daily caps and advertiser separation', () => {

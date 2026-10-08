@@ -205,7 +205,8 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 - Format presets bring categories, hour clocks, a weekly grid, dayparts, two DJ personas, imaging, a music bed and the processing sound.
 - **Time zones** follow the market: the station clock uses the primary location, and you can switch it to a fixed zone.
 - Commercials have flights, daypart restrictions, daily caps and advertiser separation. Stopsets are wrapped with a liner going in and an ID coming out, and the affidavit report shows proof of play.
-- Top-of-hour sync keeps the legal ID within seconds of :00. Overrunning hours drop music, not spots. Short hours get filler songs picked to end near :00.
+- **Every hour is planned full.** A clock is a pattern, not a stopwatch: thirteen songs at today's three-and-a-half-minute average make about 47 minutes. So the planner adds songs after the clock's positions, from its own categories in its order, and the music director plans them with the rest of the hour. The last song is picked to end the hour within 90 seconds of :00, either side. While the hour is on air, Valhalla checks it every 30 seconds. If something was skipped or songs ran short, it adds songs ahead of time, so they're prepared like the rest. If the hour would run a song past the top, its last unprepared song goes.
+- Top-of-hour sync keeps the legal ID close to :00. Overrunning hours drop music, not spots.
 - **No silence while something is voiced.** A new station's IDs are voiced during setup. If an ID or a break is still being voiced when the air would go quiet, a song airs first and the element follows it. Dead-air protection falls back to emergency audio.
 
 ### Light on the machine
@@ -301,7 +302,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 170 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 173 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```

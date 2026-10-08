@@ -21,13 +21,34 @@ const EST = { dj: 15, talk: 35, weather: 25, traffic: 25, news: 75, say: 15, toh
 const PENDING = new Set(['scheduled', 'preparing', 'ready', 'cued']);
 const IMAGING_FALLBACK = { toh_id: ['toh_id', 'id', 'sweeper'], id: ['id', 'toh_id', 'sweeper'], sweeper: ['sweeper', 'id'], liner: ['liner', 'sweeper', 'id'], promo: ['promo'] };
 
+// An hour is full when its last element ends this close to the top of the hour: up to FILL_EARLY seconds
+// before it (the next hour then starts a little early) or FILL_LATE seconds after it.
+const HOUR_SEC = 3600;
+const FILL_EARLY = 90;
+const FILL_LATE = 90;
+const ONE_SONG = 360; // more time left than this: room for more than one song
+
+/** A song's airtime: up to its mix-out point, not the full file. */
+export function songSec(track) {
+  const a = track?.analysis;
+  if (a?.mixOut) return Math.max(30, a.mixOut - (a.startSec || 0));
+  return Math.max(30, (track?.duration || 214) - 4);
+}
+
+/** The library's typical song airtime (median), for planning how many songs an hour needs. */
+function typicalSongSec() {
+  const lens = library.playable().map(songSec).sort((a, b) => a - b);
+  return lens.length ? lens[Math.floor(lens.length / 2)] : 210;
+}
+
+/** Music categories of a clock, in its order (repeats included: that's its mix). */
+function clockCats(clock) {
+  const cats = (clock?.items || []).filter((i) => i.type === 'music').map((i) => i.category);
+  return cats.length ? cats : store.data.categories.map((c) => c.id);
+}
+
 export function estDuration(item) {
-  if (item.type === 'music') {
-    // airtime is up to the mix-out point, not the full file
-    const a = item.trackId ? library.findTrack(item.trackId)?.analysis : null;
-    if (a?.mixOut) return Math.max(30, a.mixOut - (a.startSec || 0));
-    return Math.max(30, (item.duration || 214) - 4);
-  }
+  if (item.type === 'music') return songSec(item.trackId ? library.findTrack(item.trackId) || item : item);
   if (item.type === 'spot') return item.duration || 30;
   if (item.type === 'dj') return item.mode === 'talk' ? EST.talk : EST.dj;
   return EST[item.type] || 10;
@@ -87,6 +108,7 @@ export class Scheduler {
     // sequential, so the next hour's rotation sees this hour's picks
     await this.ensureHour(cur, { fromMs: now });
     if (now - cur > 30 * 60_000 || this.pendingItems().length < 6) await this.ensureHour(cur + 3600_000);
+    this.topUp(now);
     // forget old logs (keep previous hour for display)
     for (const [k, l] of this.logs) if (l.startMs < cur - 3600_000) this.logs.delete(k);
   }
@@ -147,8 +169,7 @@ export class Scheduler {
     const tz = this.tz();
     const z = zoned(new Date(startMs), tz);
     const key = hourKey(new Date(startMs), tz);
-    const clockId = store.data.grid?.[z.day]?.[z.hour];
-    const clock = store.data.clocks.find((c) => c.id === clockId) || store.data.clocks[0];
+    const clock = this.clockFor(startMs);
     const daypart = daypartFor(z.hour);
     log(`building log ${key} with clock "${clock?.name}"`);
 
@@ -179,6 +200,17 @@ export class Scheduler {
       }
     }
 
+    // a clock is a pattern, not a stopwatch: when its positions don't reach the top of the hour at the
+    // library's typical song length, songs follow them (its own categories, in its order), planned with the rest
+    const cats = clockCats(clock);
+    const typical = typicalSongSec();
+    let planSec = items.reduce((sum, it) => sum + (it.type === 'music' ? typical : estDuration(it)), 0);
+    // (the last stretch is left to fillSongs, which picks the song that ends the hour nearest the top)
+    for (let n = items.filter((i) => i.type === 'music').length; HOUR_SEC - planSec > ONE_SONG && cats.length; n++) {
+      items.push({ ...base, id: uid('it_'), type: 'music', category: cats[n % cats.length], fill: true });
+      planSec += typical;
+    }
+
     // estimate start times then let the music director fill the music slots
     let offset = 0;
     const slots = [];
@@ -200,10 +232,7 @@ export class Scheduler {
     }
     const liveSlots = slots.filter((s) => s.slot >= skipBefore);
     // songs already planned in other hours count as plays for the rotation rules
-    const planned = this.allItems()
-      .filter((i) => i.type === 'music' && i.trackId && ['scheduled', 'preparing', 'ready', 'playing'].includes(i.status))
-      .map((i) => ({ at: (this.logs.get(i.hourKey)?.startMs || startMs) + (i.estOffset || 0) * 1000, trackId: i.trackId, title: i.title, artist: i.artist }));
-    const picks = await selectForHour({ at: startMs, slots: liveSlots, daypart, planned });
+    const picks = await selectForHour({ at: startMs, slots: liveSlots, daypart, planned: this.plannedPlays() });
     for (const s of liveSlots) {
       const pick = picks.get(s.slot);
       const it = items[s.slot];
@@ -217,9 +246,107 @@ export class Scheduler {
     }
     // recompute estimates with real durations
     offset = fromMs && fromMs > startMs ? (fromMs - startMs) / 1000 : 0;
-    for (const it of items) { it.estOffset = offset; offset += estDuration(it); }
+    for (const it of items) { it.estOffset = offset; if (it.status !== 'failed') offset += estDuration(it); }
+    // with the real songs: an added song the hour turned out not to need goes, and a short hour gets more
+    while (items.at(-1)?.fill && (items.at(-1).status === 'failed' || offset - estDuration(items.at(-1)) >= HOUR_SEC - FILL_EARLY)) {
+      const last = items.pop();
+      if (last.status !== 'failed') offset -= estDuration(last);
+    }
+    const plan = { hourKey: key, startMs, clockId: clock?.id, clockName: clock?.name, daypart: daypart?.name, items };
+    this.fillSongs(plan, offset);
+    return plan;
+  }
 
-    return { hourKey: key, startMs, clockId: clock?.id, clockName: clock?.name, daypart: daypart?.name, items };
+  /** The clock the weekly grid puts in the hour starting at `startMs`. */
+  clockFor(startMs) {
+    const z = zoned(new Date(startMs), this.tz());
+    const clockId = store.data.grid?.[z.day]?.[z.hour];
+    return store.data.clocks.find((c) => c.id === clockId) || store.data.clocks[0];
+  }
+
+  /** Songs planned in the logs (and in `plan`, an hour being planned), as plays at their estimated air times. */
+  plannedPlays(plan = null) {
+    const items = [...this.allItems().filter((i) => !plan || i.hourKey !== plan.hourKey), ...(plan?.items || [])];
+    return items
+      .filter((i) => i.type === 'music' && i.trackId && (PENDING.has(i.status) || i.status === 'playing'))
+      .map((i) => ({ at: ((i.hourKey === plan?.hourKey ? plan.startMs : this.logs.get(i.hourKey)?.startMs) || Date.now()) + (i.estOffset || 0) * 1000, trackId: i.trackId, title: i.title, artist: i.artist }));
+  }
+
+  /**
+   * A due song for `gap` seconds before the top of the hour, by the rotation rules: from the clock's next
+   * category while there's time for more than one song, then the one that ends the hour nearest the top
+   * (or a shorter one, with another to follow, or the shortest).
+   * @returns {{t: object, catId: string} | null}
+   */
+  fitSong({ gap, at, cats, from = 0, plays, used }) {
+    const lib = library.playable();
+    const pool = [];
+    for (let k = 0; k < cats.length; k++) {
+      const catId = cats[(from + k) % cats.length];
+      const category = store.data.categories.find((c) => c.id === catId) || { id: catId };
+      for (const t of candidatesFor(lib, { at, plays, rotation: store.data.rotation, category }, 10)) {
+        if (!used.has(String(t.id)) && !pool.some((p) => p.t.id === t.id)) pool.push({ t, catId });
+      }
+      if (gap > ONE_SONG && pool.length) break;
+    }
+    if (gap > ONE_SONG) return pool[0] || null;
+    const len = (p) => songSec(p.t);
+    return pool.find((p) => len(p) >= gap - FILL_EARLY && len(p) <= gap + FILL_LATE)
+      || pool.find((p) => len(p) < gap - FILL_EARLY)
+      || pool.sort((a, b) => len(a) - len(b))[0] || null;
+  }
+
+  /**
+   * Add songs at the end of hour `l` (its items end `endSec` seconds after its start) until it reaches the top
+   * of the hour. Returns the songs added.
+   */
+  fillSongs(l, endSec) {
+    const cats = clockCats(store.data.clocks.find((c) => c.id === l.clockId) || this.clockFor(l.startMs));
+    const used = new Set([...this.allItems(), ...l.items].filter((i) => i.trackId && i.status !== 'failed').map((i) => String(i.trackId)));
+    const plays = [...library.musicPlays(), ...this.plannedPlays(l)];
+    let from = l.items.filter((i) => i.type === 'music').length; // carry on the clock's category order
+    const added = [];
+    while (HOUR_SEC - endSec > FILL_EARLY && added.length < 12) {
+      const at = l.startMs + endSec * 1000;
+      const pick = this.fitSong({ gap: HOUR_SEC - endSec, at, cats, from: from++, plays, used });
+      if (!pick) break;
+      const it = { id: uid('it_'), hourKey: l.hourKey, status: 'scheduled', type: 'music', category: pick.catId, ...trackFields(pick.t), why: 'fills the hour', fill: true, estOffset: endSec };
+      l.items.push(it);
+      used.add(String(pick.t.id));
+      plays.push({ at, trackId: pick.t.id, title: pick.t.title, artist: pick.t.artist });
+      endSec += estDuration(it);
+      added.push(it);
+    }
+    return added;
+  }
+
+  /**
+   * Keep the hour on air full to the top: when what's left of it would end early (something was skipped,
+   * songs ran shorter than planned), songs are added at its end now, ahead of time, so they're prepared like
+   * the rest. When it would run a song past the top, its last song goes (if it isn't prepared yet).
+   */
+  topUp(now = Date.now()) {
+    const l = this.logs.get(hourKey(new Date(now), this.tz()));
+    if (!l || l.stopgap || this.generating.has(l.hourKey)) return [];
+    let t = now;
+    for (const i of this.allItems()) if (i.status === 'playing' && i.airedAt) t = Math.max(t, i.airedAt + estDuration(i) * 1000);
+    const pending = l.items.filter((i) => PENDING.has(i.status));
+    for (const i of pending) t += estDuration(i) * 1000;
+    const endSec = (t - l.startMs) / 1000;
+    const last = pending.at(-1);
+    if (endSec > HOUR_SEC + FILL_LATE && last?.type === 'music' && last.status === 'scheduled' && pending.length > 4
+      && endSec - estDuration(last) >= HOUR_SEC - FILL_EARLY) {
+      this.drop(last, 'dropped');
+      log(`hour ${l.hourKey} would run over: dropped ${last.artist} - ${last.title}`);
+      this.onChange();
+      return [];
+    }
+    const added = this.fillSongs(l, endSec);
+    if (added.length) {
+      log(`hour ${l.hourKey} would end early: added ${added.map((i) => `${i.artist} - ${i.title}`).join(', ')}`);
+      this.onChange();
+    }
+    return added;
   }
 
   imagingItem(im, base, type) {
@@ -297,7 +424,7 @@ export class Scheduler {
         return ready(it);
       }
       // the current hour has run dry well before the top of the hour: fill with music
-      if (secsToTop > 50) {
+      if (secsToTop > FILL_EARLY) {
         const f = this.filler(curKey, now, secsToTop);
         if (f) return { wait: f };
       }
@@ -317,33 +444,21 @@ export class Scheduler {
   }
 
   /**
-   * Emergency/filler music from the current clock categories (rule-based, synchronous). With
-   * `secsLeft` (time to the top of the hour) it takes a song that ends near the top of the hour
-   * rather than one that runs minutes past it, or the shortest due song if none fits. It goes at
-   * the end of the hour, or right after the item `after`.
+   * Emergency/filler music from the hour's clock categories (rule-based, synchronous). With `secsLeft`
+   * (time to the top of the hour) it takes a song that ends near the top (see fitSong). It goes at the end
+   * of the hour, or right after the item `after`.
    */
   filler(curKey, now, secsLeft = Infinity, after = null) {
     const l = this.logs.get(curKey);
-    const cats = store.data.categories;
-    const clock = store.data.clocks.find((c) => c.id === l?.clockId) || store.data.clocks[0];
-    const musicCats = (clock?.items || []).filter((i) => i.type === 'music').map((i) => i.category);
-    const plays = library.musicPlays();
-    const usedIds = new Set(this.allItems().filter((i) => i.trackId && i.status !== 'failed').map((i) => i.trackId));
-    const len = (t) => t.analysis?.duration || t.duration || 240;
-    let pick = null; let catId = null; let shortest = null;
-    for (const c of [...new Set(musicCats.length ? musicCats : cats.map((x) => x.id))].sort(() => Math.random() - 0.5)) {
-      const category = cats.find((x) => x.id === c) || { id: c };
-      const due = candidatesFor(library.playable(), { at: now, plays, rotation: store.data.rotation, category }, 10).filter((x) => !usedIds.has(x.id));
-      const fit = due.find((x) => len(x) <= secsLeft + 30);
-      if (fit) { pick = fit; catId = c; break; }
-      for (const x of due) if (!shortest || len(x) < len(shortest.t)) shortest = { t: x, c };
-    }
-    if (!pick && shortest) ({ t: pick, c: catId } = shortest);
+    const startMs = hourStart(new Date(now), this.tz());
+    const cats = clockCats(store.data.clocks.find((c) => c.id === l?.clockId) || this.clockFor(startMs));
+    const used = new Set(this.allItems().filter((i) => i.trackId && i.status !== 'failed').map((i) => String(i.trackId)));
+    const pick = this.fitSong({ gap: secsLeft, at: now, cats, from: Math.floor(Math.random() * cats.length), plays: [...library.musicPlays(), ...this.plannedPlays()], used });
     if (!pick) return null;
-    const it = { id: uid('it_'), hourKey: curKey, status: 'scheduled', type: 'music', category: catId, ...trackFields(pick), why: 'filler', filler: true };
+    const it = { id: uid('it_'), hourKey: curKey, status: 'scheduled', type: 'music', category: pick.catId, ...trackFields(pick.t), why: 'filler', filler: true };
     // with no plan for the hour yet (it's still being made), a stopgap log airs until it arrives
     if (l) l.items.splice(after && l.items.includes(after) ? l.items.indexOf(after) + 1 : l.items.length, 0, it);
-    else this.logs.set(curKey, { hourKey: curKey, startMs: hourStart(new Date(now), this.tz()), clockName: 'Filler', stopgap: true, items: [it] });
+    else this.logs.set(curKey, { hourKey: curKey, startMs, clockName: 'Filler', stopgap: true, items: [it] });
     this.onChange();
     return it;
   }
