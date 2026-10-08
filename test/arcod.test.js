@@ -57,6 +57,7 @@ test('Qobuz tracks become Valhalla tracks', () => {
   assert.equal(arcod.normalizeTrack({ ...QTRACK, version: 'Live' }).title, 'Hangar 18 (Live)', 'a live version is a different record');
   assert.equal(arcod.cleanTitle('Dreams (2001 Remaster)'), 'Dreams');
   assert.equal(arcod.cleanTitle('Africa (Album Version)'), 'Africa');
+  assert.equal(arcod.cleanTitle('Billie Jean (Single Version)'), 'Billie Jean');
   assert.equal(arcod.cleanTitle('Layla - 2011 Remastered'), 'Layla');
   assert.equal(arcod.cleanTitle('Shout (Radio Edit)'), 'Shout (Radio Edit)', 'an edit is a different record');
   assert.equal(arcod.cleanTitle('Dance The Night (From Barbie The Album)'), 'Dance The Night', 'soundtrack labels go');

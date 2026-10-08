@@ -53,7 +53,7 @@ const nameOf = (a) => (typeof a?.name === 'object' ? a.name?.display : a?.name) 
 const yearOf = (d) => (d ? Number(String(d).slice(0, 4)) || null : null);
 const imageOf = (img) => img?.large || img?.small || img?.thumbnail || '';
 
-const CATALOGUE_LABEL = /\s*[([][^)\]]*\b(remaster(ed)?|album version|lp version|mono|stereo|deluxe|bonus track|anniversary|expanded)\b[^)\]]*[)\]]/gi;
+const CATALOGUE_LABEL = /\s*[([][^)\]]*\b(remaster(ed)?|album version|lp version|single version|mono|stereo|deluxe|bonus track|anniversary|expanded)\b[^)\]]*[)\]]/gi;
 /** "Dreams (2001 Remaster)" → "Dreams": catalogue labels aren't part of the song's name (a live take or radio edit is). */
 // "(From Barbie The Album)", "[From The Motion Picture \"Barbie\"]": where a soundtrack song comes from isn't its name
 const SOUNDTRACK_LABEL = /\s*[([]\s*from\b(?=[^)\]]*(\b(album|soundtrack|motion picture|film|movie|series|musical|original)\b|["“]))[^)\]]*[)\]]/gi;
