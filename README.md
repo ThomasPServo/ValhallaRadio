@@ -205,8 +205,8 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 - Format presets bring categories, hour clocks, a weekly grid, dayparts, two DJ personas, imaging, a music bed and the processing sound.
 - **Time zones** follow the market: the station clock uses the primary location, and you can switch it to a fixed zone.
 - Commercials have flights, daypart restrictions, daily caps and advertiser separation. Stopsets are wrapped with a liner going in and an ID coming out, and the affidavit report shows proof of play.
-- Top-of-hour sync keeps the legal ID within seconds of :00. Overrunning hours drop music, not spots, and short hours get filler.
-- Dead-air protection falls back to emergency audio.
+- Top-of-hour sync keeps the legal ID within seconds of :00. Overrunning hours drop music, not spots. Short hours get filler songs picked to end near :00.
+- **No silence while something is voiced.** A new station's IDs are voiced during setup. If an ID or a break is still being voiced when the air would go quiet, a song airs first and the element follows it. Dead-air protection falls back to emergency audio.
 
 ### Light on the machine
 
@@ -301,7 +301,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 165 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 170 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```

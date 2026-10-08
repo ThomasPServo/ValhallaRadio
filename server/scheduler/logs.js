@@ -272,8 +272,11 @@ export class Scheduler {
       if (it.status === 'ready') return { item: it };
       if (urgent) {
         // the timeline is about to go silent: air the next prepared item instead and keep this one for later
-        const alt = this.pendingItems().slice(0, 5).find((x) => x.status === 'ready' && x.hourKey <= it.hourKey && x.type !== 'spot');
+        const soon = this.pendingItems().slice(0, 5).filter((x) => x.hourKey <= it.hourKey && x.type !== 'spot');
+        const alt = soon.find((x) => x.status === 'ready');
         if (alt) return { item: alt };
+        // an ID or break still being voiced (a new station's first ID) and no song coming to air first: add one
+        if (it.type !== 'music' && it.type !== 'spot' && it.hourKey === curKey && !soon.some((x) => x.type === 'music')) this.filler(curKey, now, secsToTop, it);
       }
       return { wait: it };
     };
@@ -295,12 +298,12 @@ export class Scheduler {
       }
       // the current hour has run dry well before the top of the hour: fill with music
       if (secsToTop > 50) {
-        const f = this.filler(curKey, now);
+        const f = this.filler(curKey, now, secsToTop);
         if (f) return { wait: f };
       }
       return ready(it);
     }
-    const f = this.filler(curKey, now);
+    const f = this.filler(curKey, now, secsToTop);
     return f ? { wait: f } : {};
   }
 
@@ -313,26 +316,36 @@ export class Scheduler {
     if (status === 'missed') log(`spot ${it.title} missed (make-good needed)`);
   }
 
-  /** Emergency/filler music from the current clock categories (rule-based, synchronous). */
-  filler(curKey, now) {
+  /**
+   * Emergency/filler music from the current clock categories (rule-based, synchronous). With
+   * `secsLeft` (time to the top of the hour) it takes a song that ends near the top of the hour
+   * rather than one that runs minutes past it, or the shortest due song if none fits. It goes at
+   * the end of the hour, or right after the item `after`.
+   */
+  filler(curKey, now, secsLeft = Infinity, after = null) {
     const l = this.logs.get(curKey);
     const cats = store.data.categories;
     const clock = store.data.clocks.find((c) => c.id === l?.clockId) || store.data.clocks[0];
     const musicCats = (clock?.items || []).filter((i) => i.type === 'music').map((i) => i.category);
     const plays = library.musicPlays();
     const usedIds = new Set(this.allItems().filter((i) => i.trackId && i.status !== 'failed').map((i) => i.trackId));
-    for (const catId of [...new Set(musicCats.length ? musicCats : cats.map((c) => c.id))].sort(() => Math.random() - 0.5)) {
-      const category = cats.find((c) => c.id === catId) || { id: catId };
-      const t = candidatesFor(library.playable(), { at: now, plays, rotation: store.data.rotation, category }, 10).find((x) => !usedIds.has(x.id));
-      if (t) {
-        const it = { id: uid('it_'), hourKey: curKey, status: 'scheduled', type: 'music', category: catId, ...trackFields(t), why: 'filler', filler: true };
-        // with no plan for the hour yet (it's still being made), a stopgap log airs until it arrives
-        if (l) l.items.push(it); else this.logs.set(curKey, { hourKey: curKey, startMs: hourStart(new Date(now), this.tz()), clockName: 'Filler', stopgap: true, items: [it] });
-        this.onChange();
-        return it;
-      }
+    const len = (t) => t.analysis?.duration || t.duration || 240;
+    let pick = null; let catId = null; let shortest = null;
+    for (const c of [...new Set(musicCats.length ? musicCats : cats.map((x) => x.id))].sort(() => Math.random() - 0.5)) {
+      const category = cats.find((x) => x.id === c) || { id: c };
+      const due = candidatesFor(library.playable(), { at: now, plays, rotation: store.data.rotation, category }, 10).filter((x) => !usedIds.has(x.id));
+      const fit = due.find((x) => len(x) <= secsLeft + 30);
+      if (fit) { pick = fit; catId = c; break; }
+      for (const x of due) if (!shortest || len(x) < len(shortest.t)) shortest = { t: x, c };
     }
-    return null;
+    if (!pick && shortest) ({ t: pick, c: catId } = shortest);
+    if (!pick) return null;
+    const it = { id: uid('it_'), hourKey: curKey, status: 'scheduled', type: 'music', category: catId, ...trackFields(pick), why: 'filler', filler: true };
+    // with no plan for the hour yet (it's still being made), a stopgap log airs until it arrives
+    if (l) l.items.splice(after && l.items.includes(after) ? l.items.indexOf(after) + 1 : l.items.length, 0, it);
+    else this.logs.set(curKey, { hourKey: curKey, startMs: hourStart(new Date(now), this.tz()), clockName: 'Filler', stopgap: true, items: [it] });
+    this.onChange();
+    return it;
   }
 
   /** Replace a music item whose audio failed with another track from the same category. */

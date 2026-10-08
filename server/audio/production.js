@@ -30,6 +30,8 @@ function imagingBedId() {
   return id.startsWith('synth:') ? id : `synth:${FORMAT_BEDS[store.station.formatId] || 'warm'}`;
 }
 
+const rendering = new Map(); // name -> the render writing it
+
 /** Render (or reuse) a produced element from a TTS voice file. */
 async function render(name, voiceFile, opts) {
   const file = path.join(TTS_CACHE_DIR, `${name}.wav`);
@@ -39,10 +41,30 @@ async function render(name, voiceFile, opts) {
     try { fs.utimesSync(file, now, now); fs.utimesSync(meta, now, now); } catch { /* fine */ } // in use: the janitor keeps it
     return { file, markers: JSON.parse(fs.readFileSync(meta, 'utf8')) };
   }
-  const pcm = await decodeToPcm(voiceFile);
-  const markers = await analyze('produce', pcm, { ...opts, out: file });
-  fs.writeFileSync(meta, JSON.stringify(markers));
-  return { file, markers };
+  // asked for again while rendering (made ahead of time, then wanted on air): one render, its own markers each
+  if (!rendering.has(name)) {
+    rendering.set(name, (async () => {
+      const pcm = await decodeToPcm(voiceFile);
+      const markers = await analyze('produce', pcm, { ...opts, out: file });
+      fs.writeFileSync(meta, JSON.stringify(markers));
+      return markers;
+    })().finally(() => rendering.delete(name)));
+  }
+  const markers = await rendering.get(name);
+  return { file, markers: { ...markers } };
+}
+
+/**
+ * Voice and produce the station's IDs ahead of time (at setup), in the order they'll be picked, so a
+ * new station's first ID is ready when it goes on air instead of rendering while the air is silent.
+ */
+export async function prerenderIds() {
+  if (!ttsAvailable()) return;
+  const due = (type) => store.data.imaging.items.filter((i) => i.enabled && i.type === type && i.text && !i.file).sort((a, b) => (a.lastUsed || 0) - (b.lastUsed || 0));
+  const ids = due('id'); const tohs = due('toh_id');
+  for (const im of [...ids.slice(0, 2), ...tohs.slice(0, 1), ...ids.slice(2), ...tohs.slice(1)]) {
+    try { await produceElement({ type: im.type, imagingId: im.id }); } catch (err) { console.warn('[imaging] voicing ahead:', im.name, err.message); return; }
+  }
 }
 
 /**

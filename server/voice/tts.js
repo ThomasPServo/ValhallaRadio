@@ -12,6 +12,7 @@ import { kokoroInstalled, kokoroSpeak } from './kokoro.js';
 import { speakable } from './speech.js';
 
 const touch = (f) => { try { const now = new Date(); fs.utimesSync(f, now, now); } catch { /* fine */ } };
+const inflight = new Map(); // file -> the synthesis writing it
 
 export function activeProvider() {
   const s = store.settings;
@@ -59,7 +60,13 @@ export async function synthesize(text, voice = {}) {
   const ext = provider === 'kokoro' ? 'wav' : 'mp3';
   const file = path.join(TTS_CACHE_DIR, `${id}.${ext}`);
   if (fs.existsSync(file)) { touch(file); return file; } // reuse keeps it from the janitor
+  // the same line asked for twice at once (voiced ahead of time, and by the engine) is voiced once
+  if (!inflight.has(file)) inflight.set(file, speak(provider, spoken, voice, file).finally(() => inflight.delete(file)));
+  return inflight.get(file);
+}
 
+async function speak(provider, spoken, voice, file) {
+  const s = store.settings;
   if (provider === 'kokoro') {
     await kokoroSpeak(spoken, { voice: voice.kokoroVoice || 'af_heart', speed: voice.speed || 1, pause: voice.pause ?? 0.3, out: file });
     return file;

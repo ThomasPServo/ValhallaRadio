@@ -73,6 +73,40 @@ test('when the hour runs dry early, filler music is scheduled from the clock cat
   assert.equal(s.next(T0 + 30 * 60_000).wait.id, r.wait.id);
 });
 
+test('filler near the top of the hour takes a song that ends near the top, not one that runs minutes past it', () => {
+  store.data.library = [
+    { id: 'long', title: 'Long Live Take', artist: 'Band A', category: 'A', duration: 471 }, // the most due
+    { id: 'fits', title: 'Short Song', artist: 'Band B', category: 'A', duration: 170, lastPlayed: T0 - 10 * H },
+  ];
+  const s = sched([[T0, [item('a', 'music', T0, 'played')]], [T0 + H, [item('toh', 'toh_id', T0 + H)]]]);
+  assert.equal(s.next(T0 + H - 3 * 60_000).wait.trackId, 'fits'); // three minutes left
+});
+
+test('when no due song fits before the top of the hour, filler takes the shortest', () => {
+  store.data.library = [
+    { id: 'long', title: 'Long', artist: 'Band A', category: 'A', duration: 471 }, // the most due
+    { id: 'shorter', title: 'Shorter', artist: 'Band B', category: 'A', duration: 230, lastPlayed: T0 - 10 * H },
+  ];
+  const s = sched([[T0, [item('a', 'music', T0, 'played')]], [T0 + H, [item('toh', 'toh_id', T0 + H)]]]);
+  assert.equal(s.next(T0 + H - 100_000).wait.trackId, 'shorter');
+});
+
+test('a song airs first while an ID is still being voiced (a new station signing on), and the ID follows', () => {
+  store.data.library = [{ id: 't1', title: 'Song', artist: 'Band', category: 'A', duration: 200 }];
+  const s = sched([[T0, [item('id', 'id', T0, 'preparing'), item('sweep', 'sweeper', T0, 'scheduled')]]]);
+  assert.equal(s.next(T0 + 50 * 60_000).wait.id, 'id', 'not urgent: nothing added');
+  assert.equal(s.logs.get(key(T0)).items.length, 2);
+  assert.equal(s.next(T0 + 50 * 60_000, { urgent: true }).wait.id, 'id');
+  const items = s.logs.get(key(T0)).items;
+  assert.deepEqual(items.map((i) => i.trackId || i.id), ['id', 't1', 'sweep'], 'the song goes right after the ID');
+  s.next(T0 + 50 * 60_000, { urgent: true });
+  assert.equal(items.length, 3, 'one song, however often the engine asks');
+  items[1].status = 'ready';
+  assert.equal(s.next(T0 + 50 * 60_000, { urgent: true }).item.trackId, 't1', 'the song airs first');
+  items[1].status = 'played'; items[0].status = 'ready';
+  assert.equal(s.next(T0 + 54 * 60_000).item.id, 'id');
+});
+
 test('selectSpots honours flights, dayparts, daily caps and advertiser separation', () => {
   store.data.spots = [
     { id: 's1', advertiserId: 'adv1', title: 'Car A', text: 'x', enabled: true, maxPerDay: 2 },
