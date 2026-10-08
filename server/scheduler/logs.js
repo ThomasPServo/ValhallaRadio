@@ -5,7 +5,7 @@ import { store, uid } from '../store.js';
 import { zoned, hourStart, hourKey } from '../util/time.js';
 import { selectForHour } from '../ai/musicDirector.js';
 import { daypartFor } from '../ai/dj.js';
-import { candidatesFor } from './rotation.js';
+import { candidatesFor, artistKeys } from './rotation.js';
 import * as library from './library.js';
 
 const log = (...a) => console.log('[scheduler]', ...a);
@@ -104,12 +104,18 @@ export class Scheduler {
       .then((l) => {
         // what has aired, is on air or is committed from the version being replaced stays, and isn't repeated
         const prev = this.logs.get(key);
+        let clash = [];
         if (prev) {
           const keep = prev.items.filter((i) => ['playing', 'played', 'cued'].includes(i.status));
           const kept = new Set(keep.filter((i) => i.trackId).map((i) => String(i.trackId)));
+          const keptArtists = new Set(keep.filter((i) => i.type === 'music').flatMap((i) => artistKeys(i)));
           l.items = [...keep, ...l.items.filter((i) => !(i.trackId && kept.has(String(i.trackId))))];
+          // the plan was made without knowing what aired meanwhile: its songs by those artists make way for others
+          clash = l.items.filter((i) => i.type === 'music' && i.status === 'scheduled' && !keep.includes(i) && artistKeys(i).some((k) => keptArtists.has(k)));
         }
-        this.logs.set(key, l); this.onChange(); return l;
+        this.logs.set(key, l);
+        for (const it of clash) this.replaceMusic(it);
+        this.onChange(); return l;
       })
       .catch((err) => { log('generate failed', key, err); throw err; })
       .finally(() => this.generating.delete(key));
@@ -125,13 +131,15 @@ export class Scheduler {
     return this.ensureHour(l.startMs, { fromMs: now > l.startMs ? now : undefined, replace: true });
   }
 
-  /** Plan the current and next hour again, e.g. once the library has grown a lot since they were planned. */
-  async replanAhead(now = Date.now()) {
-    const cur = hourStart(new Date(now), this.tz());
-    for (const start of [cur, cur + 3600_000]) {
-      const key = hourKey(new Date(start), this.tz());
-      if (this.logs.has(key) || this.generating.has(key)) await this.ensureHour(start, { fromMs: start < now ? now : undefined, replace: true });
-    }
+  /**
+   * Plan the coming hour again, e.g. once the library has grown a lot since it was planned. (The current hour
+   * keeps its plan: what's next in it is already prepared, DJ breaks included.)
+   */
+  async replanNext(now = Date.now()) {
+    const start = hourStart(new Date(now), this.tz()) + 3600_000;
+    const key = hourKey(new Date(start), this.tz());
+    if (this.generating.has(key)) await this.generating.get(key).catch(() => {});
+    if (this.logs.has(key)) await this.ensureHour(start, { replace: true });
   }
 
   async generateHour(startMs, opts = {}) {

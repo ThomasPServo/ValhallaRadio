@@ -151,3 +151,33 @@ test('planning an hour again keeps what aired, is on air or is cued, and drops t
   await s.regenerate(key(T0));
   assert.deepEqual(s.logs.get(key(T0)).items.map((i) => i.id), ['o1', 'o2', 'o3', 'n2', 'n3'], "'b' is on air, so the new plan's 'b' goes");
 });
+
+test('a plan made while a stopgap aired swaps its songs by the artist on air for others due', async () => {
+  store.data.library = [
+    { id: 'f1', title: 'Filler', artist: 'Big Star', category: 'A', duration: 200 },
+    { id: 'b2', title: 'Other One', artist: 'Big Star', category: 'A', duration: 200 },
+    { id: 'c3', title: 'Someone Else', artist: 'Calm Band', category: 'A', duration: 200 },
+  ];
+  const { s, open } = slowPlanner(() => [song('p1', T0, 'b2'), song('p2', T0, 'x9')].map((i) => ({ ...i, artist: i.trackId === 'b2' ? 'Big Star' : 'Nobody', category: 'A' })), [key(T0)]);
+  const now = T0 + 20 * 60_000;
+  const first = s.ensure(now);
+  const r = s.next(now);
+  assert.equal(r.wait.trackId, 'f1');
+  r.wait.status = 'playing';
+  store.data.history.push({ at: now, type: 'music', trackId: 'f1', title: 'Filler', artist: 'Big Star' }); // what the engine records on air
+  open(key(T0));
+  await first;
+  const titles = s.logs.get(key(T0)).items.map((i) => `${i.artist}: ${i.trackId}`);
+  assert.deepEqual(titles, ['Big Star: f1', 'Calm Band: c3', 'Nobody: x9'], 'no second Big Star song right after the first');
+});
+
+test('after setup, only the coming hour is planned again; the current hour keeps its prepared items', async () => {
+  let round = 0;
+  const { s } = slowPlanner((start) => [song(`h${start === T0 ? 0 : 1}r${round}`, start, `t${start}-${round}`)]);
+  await s.ensure(T0 + 40 * 60_000); // plans this hour and the next
+  const before = s.logs.get(key(T0)).items.map((i) => i.id);
+  round = 1;
+  await s.replanNext(T0 + 41 * 60_000);
+  assert.deepEqual(s.logs.get(key(T0)).items.map((i) => i.id), before, 'current hour untouched');
+  assert.deepEqual(s.logs.get(key(T0 + H)).items.map((i) => i.id), ['h1r1'], 'next hour planned again');
+});

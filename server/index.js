@@ -193,11 +193,11 @@ app.post('/api/setup', wrap(async (req, res) => {
     };
     setupEvents.on('progress', go);
   }
-  // hours planned while the library was still coming in are planned again from all of it
+  // the coming hour, if it was planned while the library was still coming in, is planned again from all of it
   const replan = (p) => {
     if (!p.done) return;
     setupEvents.off('progress', replan);
-    if (early && engine.running) scheduler.replanAhead().catch((err) => console.warn('[setup] re-plan', err.message));
+    if (early && engine.running) scheduler.replanNext().catch((err) => console.warn('[setup] re-plan', err.message));
   };
   setupEvents.on('progress', replan);
   res.json({ ...bootstrap(), job });
