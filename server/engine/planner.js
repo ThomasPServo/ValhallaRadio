@@ -97,7 +97,14 @@ export function planTransition({ now, prev, next, others = [], opts = {} }) {
   } else if (A.kind === 'music') {
     // ---------------------------------------------------------------- song → voice / imaging / spot
     const vs = B.voiceStart ?? 0;
-    if (B.kind === 'voice') {
+    if (B.kind === 'voice' && B.bedded) {
+      // a report with its own sounder and bed starts clean: on the song's last hit, or as the song fades
+      // (its bed under the song's outro would be two pieces of music at once)
+      if (A.endType === 'cold') { start = A.end + 0.05; notes.push('Song ends, then the report'); }
+      else { fade('prev', A.mixOutAbs, 0.9); start = A.mixOutAbs + 0.45; notes.push('Song fades, then the report'); }
+      if (A.vocalEndAbs != null) start = Math.max(start, A.vocalEndAbs + 0.3);
+      type = 'post';
+    } else if (B.kind === 'voice') {
       const talkEnd = A.endType === 'fade' ? Math.min(A.end, A.mixOutAbs + 1.5) : A.end;
       if (A.vocalEndAbs != null && A.vocalEndAbs < talkEnd) {
         const earliest = A.vocalEndAbs + 0.35 - vs;
@@ -138,7 +145,15 @@ export function planTransition({ now, prev, next, others = [], opts = {} }) {
     start = Math.max(start, now + 0.05);
   } else if (B.kind === 'music') {
     // ---------------------------------------------------------------- voice / imaging / spot → song
-    if (A.kind === 'voice') {
+    if (A.kind === 'voice' && A.bedded) {
+      // the report's bed can't be pulled from under its voice, so no talk-up: the song starts as the
+      // voice ends and the bed's tail fades away under it
+      start = A.voiceEndAbs + 0.08;
+      if (B.vocalStart != null) start = Math.max(start, A.voiceEndAbs + o.minVocalGap - B.vocalStart);
+      fade('prev', start, 0.7);
+      type = 'post';
+      notes.push('Report ends, then the song');
+    } else if (A.kind === 'voice') {
       if (B.vocalStart != null) {
         const ideal = A.voiceEndAbs + o.postGap - B.vocalStart;
         start = Math.min(Math.max(ideal, A.voiceStartAbs + 0.4), A.voiceEndAbs);

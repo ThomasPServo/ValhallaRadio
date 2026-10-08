@@ -187,17 +187,17 @@ function spot(id, seconds) {
 const bedGain = (engine) => (engine.bed ? engine.bed.gainAt(engine.frame) : 0);
 const level = Math.pow(10, -12 / 20);
 
-test('auto-bed: dry talk gets a bed that hands over to the song intro', () => {
+test('auto-bed: a real stretch of dry talk gets a bed that hands over to the song intro', () => {
   store.data.settings.autoBed = { enabled: true, levelDb: -12, bed: 'auto' };
-  const { engine, items } = setup([voice('v', 6), song('b', 12, { vocalStart: 2 })]);
+  const { engine, items } = setup([voice('v', 10), song('b', 12, { vocalStart: 2 })]);
   withBed(engine);
   let bAt = null;
-  const tl = run(engine, 9, () => {
+  const tl = run(engine, 13, () => {
     if (bAt === null && items[1].status === 'playing') bAt = engine.nowSec();
     return { bed: bedGain(engine), on: Boolean(engine.bed?.on) };
   });
   const at = (t) => tl.find((x) => x.t >= t);
-  assert.ok(bAt > 4 && bAt < 5, `song comes in under the talk at ${bAt}`);
+  assert.ok(bAt > 8 && bAt < 9, `song comes in under the talk at ${bAt}`);
   assert.ok(at(0.8).bed > level * 0.95, `bed up under the dry talk (${at(0.8).bed})`);
   assert.ok(at(bAt - 0.2).on, 'bed holds until the song starts');
   assert.ok(!at(bAt + 0.1).on && at(bAt + 0.1).bed > 0, 'bed fades (not cuts) as the song comes in');
@@ -213,9 +213,9 @@ test('auto-bed: no bed when the DJ is talking over a song', () => {
   assert.equal(Math.max(...tl.map((x) => x.bed)), 0);
 });
 
-test('auto-bed: a short dry moment before the song gets no bed', () => {
+test('auto-bed: a few seconds of dry talk before the song gets no bed', () => {
   store.data.settings.autoBed = { enabled: true, levelDb: -12, bed: 'auto' };
-  const { engine } = setup([voice('v', 3), song('b', 10, { vocalStart: 1.5 })]);
+  const { engine } = setup([voice('v', 6), song('b', 10, { vocalStart: 1.5 })]);
   withBed(engine);
   const tl = run(engine, 5, () => ({ bed: bedGain(engine) }));
   assert.equal(Math.max(...tl.map((x) => x.bed)), 0);
@@ -239,10 +239,10 @@ test('auto-bed: carries straight through back-to-back talk (weather into traffic
 
 test('auto-bed: a spot takes the bed out quickly', () => {
   store.data.settings.autoBed = { enabled: true, levelDb: -12, bed: 'auto' };
-  const { engine, items } = setup([voice('v', 4), spot('s', 4)]);
+  const { engine, items } = setup([voice('v', 8), spot('s', 4)]);
   withBed(engine);
   let sAt = null;
-  const tl = run(engine, 7, () => {
+  const tl = run(engine, 11, () => {
     if (sAt === null && items[1].status === 'playing') sAt = engine.nowSec();
     return { bed: bedGain(engine) };
   });

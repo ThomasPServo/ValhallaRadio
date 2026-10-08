@@ -153,11 +153,7 @@ test('planning an hour again keeps what aired, is on air or is cued, and drops t
 });
 
 test('a plan made while a stopgap aired swaps its songs by the artist on air for others due', async () => {
-  store.data.library = [
-    { id: 'f1', title: 'Filler', artist: 'Big Star', category: 'A', duration: 200 },
-    { id: 'b2', title: 'Other One', artist: 'Big Star', category: 'A', duration: 200 },
-    { id: 'c3', title: 'Someone Else', artist: 'Calm Band', category: 'A', duration: 200 },
-  ];
+  store.data.library = [{ id: 'f1', title: 'Filler', artist: 'Big Star', category: 'A', duration: 200 }];
   const { s, open } = slowPlanner(() => [song('p1', T0, 'b2'), song('p2', T0, 'x9')].map((i) => ({ ...i, artist: i.trackId === 'b2' ? 'Big Star' : 'Nobody', category: 'A' })), [key(T0)]);
   const now = T0 + 20 * 60_000;
   const first = s.ensure(now);
@@ -165,6 +161,10 @@ test('a plan made while a stopgap aired swaps its songs by the artist on air for
   assert.equal(r.wait.trackId, 'f1');
   r.wait.status = 'playing';
   store.data.history.push({ at: now, type: 'music', trackId: 'f1', title: 'Filler', artist: 'Big Star' }); // what the engine records on air
+  store.data.library.push( // the library grows while the hour is being planned
+    { id: 'b2', title: 'Other One', artist: 'Big Star', category: 'A', duration: 200 },
+    { id: 'c3', title: 'Someone Else', artist: 'Calm Band', category: 'A', duration: 200 },
+  );
   open(key(T0));
   await first;
   const titles = s.logs.get(key(T0)).items.map((i) => `${i.artist}: ${i.trackId}`);

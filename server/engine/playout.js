@@ -259,11 +259,18 @@ export class Playout extends EventEmitter {
       if (F < vEnd) {
         if (this.bed?.on) want = true; // already up: hold it while the talk stays dry
         else {
-          // only bring a bed in for a real stretch of dry talk, not a one-second gap before the song
+          // only bring a bed in for a real stretch of dry talk: a few seconds between the end of one song and
+          // the intro of the next is natural (a bed fading in and straight out again would sound busier)
           let coverAt = vEnd;
           for (const s of live) if (s.kind === 'music' && s.start > F) coverAt = Math.min(coverAt, s.start);
-          if (this.cue?.item.type === 'music') coverAt = Math.min(coverAt, this.cue.startFrame);
-          want = coverAt - F > 2.5 * SR;
+          const c = this.cue;
+          if (c?.item.type === 'music') coverAt = Math.min(coverAt, c.startFrame);
+          else if (c?.item.prep?.kind === 'voice' && this.bedWanted(c.item) && c.startFrame <= vEnd + SR) {
+            // talk that runs straight into more talk (weather into traffic) is one stretch
+            const p = c.item.prep;
+            coverAt = Math.max(coverAt, c.startFrame + Math.round(((p.markers?.voiceEnd ?? p.audio.durationSec) + 0.25) * SR));
+          }
+          want = coverAt - F > (cfg.minDrySec ?? 6) * SR;
         }
       }
     }
@@ -407,7 +414,7 @@ export class Playout extends EventEmitter {
       d.mixOut = m.mixOut != null ? m.mixOut - st : null;
       d.vocalEnd = m.instrumental ? 0 : m.vocalEnd != null ? Math.max(0, m.vocalEnd - st) : null;
       if (m.tailTempo) d.beat = { period: m.tailTempo.period, phase: m.tailTempo.phase - st, confidence: m.tailTempo.confidence };
-    } else Object.assign(d, { voiceStart: m.voiceStart, voiceEnd: m.voiceEnd, post: m.post, tailStart: m.tailStart });
+    } else Object.assign(d, { voiceStart: m.voiceStart, voiceEnd: m.voiceEnd, post: m.post, tailStart: m.tailStart, bedded: Boolean(m.bedded) });
     return d;
   }
 
@@ -425,7 +432,7 @@ export class Playout extends EventEmitter {
         beat: m.headTempo ? { period: m.headTempo.period, confidence: m.headTempo.confidence } : null,
       };
     }
-    return { kind: p.kind, len: p.audio.durationSec, voiceStart: m.voiceStart, voiceEnd: m.voiceEnd, post: m.post, tailStart: m.tailStart };
+    return { kind: p.kind, len: p.audio.durationSec, voiceStart: m.voiceStart, voiceEnd: m.voiceEnd, post: m.post, tailStart: m.tailStart, bedded: Boolean(m.bedded) };
   }
 
   // ------------------------------------------------------------------ on air
@@ -750,6 +757,8 @@ export class Playout extends EventEmitter {
       voiceEnd: rel(el.markers?.voiceEnd, off + len),
       post: rel(el.markers?.post ?? el.markers?.voiceEnd, off + len),
       tailStart: rel(el.markers?.tailStart, off + len),
+      // a report produced over its own sounder and bed (older renders don't say: the setting decides)
+      bedded: kind === 'voice' && (el.markers?.bed ?? (['news', 'weather', 'traffic'].includes(item.type) && store.settings.production?.infoBeds !== false)),
     };
     return { kind, audio, markers, peaks: computePeaks(audio.pcm.subarray(audio.startFrame * 2, audio.endFrame * 2), PEAK_SECONDS) };
   }

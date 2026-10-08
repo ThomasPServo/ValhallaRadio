@@ -139,7 +139,7 @@ Claude writes in the persona's voice and is never allowed to invent facts. Numbe
 - **Analysis as songs stream:** loudness (BS.1770), tempo and first beat, intro ramp, ending type (cold or fade), and the mix-out point. Vocal in/out times come from synced lyrics (LRCLIB). Hand-set markers override them in the waveform editor.
 - **Segues** start at each song's mix-out point, beat-aligned when tempos are known, with shaped crossfades instead of linear fades.
 - **The DJ never talks over vocals.** Talk starts only after the outgoing vocals end. Talk-ups size the break to the next song's intro so the vocals hit right after the last word ("hitting the post"). With unknown vocal timing, Valhalla waits instead of guessing.
-- **Auto-bed:** when there's nothing to talk over (after a stopset, a cold ending, or back-to-back reports), a music bed comes up under the DJ and hands over to the next intro. Beds are synthesized loops (Pulse, Warm, Drive and Chill, matched to your format) or your own uploads, crossfaded into seamless loops.
+- **Auto-bed:** most breaks talk over the end of one song and up the intro of the next, with no bed. Only a real stretch of dry talk (6 seconds or more, e.g. after a stopset or a cold ending, or back-to-back reports) brings a music bed up under the DJ, and it hands over to the next intro. A few seconds of talk between songs stays dry. Beds are synthesized loops (Pulse, Warm, Drive and Chill, matched to your format) or your own uploads, crossfaded into seamless loops.
 - Spots butt tightly, and imaging overlaps song intros up to the post.
 
 ### Getting songs
@@ -181,7 +181,7 @@ Because this is known before the song airs, the segue is planned on the real fad
 ### Imaging
 
 - **Produced automatically from copy**, with sound design rendered in a worker thread: whooshes, risers, sub-drop impacts, reverb and an echo throw on the last word. Six styles: *punch*, *riser*, *smooth*, *stutter*, *voiced over the music bed*, and *dry*.
-- News, weather and traffic get their own sounder and bed.
+- News, weather and traffic get their own sounder and bed, and air clean between songs: the song ends or fades, the sounder fires, and the next song starts as the report ends (their bed never plays under a song).
 - **Import your own produced imaging:** in Imaging → *Import*, pick files, pick a whole folder, or drag and drop. MP3, WAV, AIFF, FLAC and M4A all work. Each file is checked, and its type is read from file and folder names (`TOH`, `Legal ID`, `Station ID`, `Jingle`, `Sweeper`, `Stinger`, `Liner`, `Promo`, `Bed`), with the length as a fallback; you can change it after import. By default, imported pieces replace voiced copy of the same type on air. Types you haven't imported still use voiced copy, and you can choose to mix the two instead.
 - **Sweeper creator:** Claude writes fresh imaging weekly (artist roll-calls from your rotation, positioning lines, local and seasonal flavor), and every piece is produced and ready to air. Every line passes a broadcast check first: no ratings or "number one" claims, contests, unverifiable promises, profanity or web addresses, and legal IDs must carry the call letters and city. Seasonal pieces retire themselves, and older auto pieces rotate out. Pinned and hand-made pieces stay.
 
@@ -299,7 +299,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 117 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 165 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```

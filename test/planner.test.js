@@ -167,3 +167,22 @@ test('property: plans never start in the past', () => {
     assert.ok(p.start >= now, `${pk}->${nk} starts ${p.start} before now ${now}`);
   }
 });
+
+test('a report with its own sounder and bed is never layered over a song', () => {
+  const report = voice(20, { voiceStart: 0.9, voiceEnd: 18.2, bedded: true });
+  // into the report: no talk over the instrumental outro, even when there is one
+  const fade = planTransition({ now: 150, prev: song({ vocalEnd: 170 }), next: report });
+  assert.equal(fade.type, 'post');
+  assert.ok(fade.start >= 192, `report starts at ${fade.start}, after the mix-out point`);
+  assert.ok(fade.ramps.some((r) => r.target === 'prev' && r.lane === 'fade' && r.to === 0 && r.at <= fade.start), 'song faded first');
+  const cold = planTransition({ now: 150, prev: song({ endType: 'cold', mixOut: 199.6, vocalEnd: 190 }), next: report });
+  assert.ok(cold.start >= 200, 'on the cold ending, after the last hit');
+  // out of the report: the song starts as the voice ends, not under it, and the bed's tail goes
+  const out = planTransition({ now: 10, prev: { ...report, start: 0 }, next: nextSong({ vocalStart: 12 }) });
+  assert.equal(out.type, 'post');
+  assert.ok(out.start >= 18.2, `song starts at ${out.start}, after the report's voice`);
+  assert.ok(out.ramps.some((r) => r.target === 'prev' && r.lane === 'fade' && r.to === 0), "the bed's tail fades out");
+  // a plain DJ voice still talks over the outro and up the intro
+  assert.equal(planTransition({ now: 150, prev: song({ vocalEnd: 170 }), next: voice(8) }).type, 'talkover');
+  assert.equal(planTransition({ now: 10, prev: { ...voice(8), start: 0 }, next: nextSong({ vocalStart: 12 }) }).type, 'talkup');
+});

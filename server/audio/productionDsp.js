@@ -405,7 +405,7 @@ function produceInfo(voice, kind, useBed) {
     mixAt(out, bd, 0.2, kind === 'news' ? 0.75 : 0.6);
   }
   mixAt(out, v, vs, 1);
-  return { buffer: normalizePeak(out, -1), markers: { voiceStart: vs, voiceEnd: vs + vlen, post: vs + vlen, tailStart: vs + vlen + 0.3 } };
+  return { buffer: normalizePeak(out, -1), markers: { voiceStart: vs, voiceEnd: vs + vlen, post: vs + vlen, tailStart: vs + vlen + 0.3, bed: Boolean(useBed) } };
 }
 
 /**
