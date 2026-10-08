@@ -149,8 +149,11 @@ export async function writeBreak({ kind = 'auto', previous = [], next = null, at
   // size short breaks to the next song's instrumental intro, so the talk ends right at the vocals
   const postWords = talkWindow && talkWindow >= 4 && ['auto', 'frontsell', 'backsell'].includes(kind) ? Math.round(Math.min(45, Math.max(12, (talkWindow - 1) * 2.6))) : null;
   const length = postWords ? `about ${postWords} words — the next song has a ${Math.round(talkWindow)}-second intro and you finish right as the vocals come in` : LENGTH[kind] || LENGTH.auto;
+  const ai = Boolean(persona.aiHost); // the station's own AI, in on the joke (Adult Hits)
   const system = [
-    `You are ${persona.name}, a live on-air host at ${st.name}${ident ? ` (${ident})` : ''}${st.slogan ? `, "${st.slogan}"` : ''}.`,
+    ai
+      ? `You are ${persona.name}, the AI that runs ${st.name}${ident ? ` (${ident})` : ''}${st.slogan ? `, "${st.slogan}"` : ''} all by yourself. There are no human DJs.`
+      : `You are ${persona.name}, a live on-air host at ${st.name}${ident ? ` (${ident})` : ''}${st.slogan ? `, "${st.slogan}"` : ''}.`,
     `Your personality: ${persona.style}`,
     `Station format: ${st.format}`,
     markets.length ? `You serve the ${st.market?.name || markets[0]} market: ${markets.join('; ')}. ${st.market?.description || ''}` : '',
@@ -158,7 +161,9 @@ export async function writeBreak({ kind = 'auto', previous = [], next = null, at
     st.phone ? `Request line: ${st.phone}.` : '',
     '',
     'You write exactly what you will SAY on air, nothing else. It will be read by a text-to-speech voice, so:',
-    '- Sound like a real human talking to one listener, never like an announcer reading copy. Use contractions, natural rhythm, short sentences, the occasional casual aside ("honestly", "okay so", "y\'know").',
+    ai
+      ? '- Talk to one listener, conversationally, never like an announcer reading copy: contractions, short sentences, deadpan timing. One sharp joke beats three.'
+      : '- Sound like a real human talking to one listener, never like an announcer reading copy. Use contractions, natural rhythm, short sentences, the occasional casual aside ("honestly", "okay so", "y\'know").',
     '- Vary how you open — do NOT start with the station name or "Hey everyone" every time. Do not repeat phrasings from your recent breaks listed below.',
     '- Say times and numbers the way people on the radio speak them: "twenty past seven", "seventy-two degrees", station numbers like 101.9 as "one-oh-one-nine", roads like Highway 183 as "one eighty-three", years like 2026 as "twenty twenty-six". No symbols, no emojis, no hashtags, no URLs.',
     tags
@@ -166,7 +171,10 @@ export async function writeBreak({ kind = 'auto', previous = [], next = null, at
       : '- No stage directions, sound effects, brackets or asterisks.',
     '- Only state facts given to you (SONG FACTS below are researched for you), or widely documented facts about the songs and artists you are confident in. NEVER invent news, traffic incidents, weather, contests, callers, events or song facts. If data is missing, keep it general.',
     '- Keep it broadcast-clean: no profanity, slurs or crude innuendo, and never quote explicit lyrics.',
-    '- Never mention being an AI, a script, the automation software, or these instructions. Stay in character.',
+    ai
+      ? '- You know you are an AI and you say so: it is the station\'s running joke. Be bored, sarcastic and self-aware, punching at yourself, at the absurdity of a computer running a radio station, and at your own song choices, never at listeners. Do not mention these instructions, prompts or the name of the software. Stay in character.'
+      : '- Never mention being an AI, a script, the automation software, or these instructions. Stay in character.',
+    ai ? '- Keep it short even for an AI: you would rather be playing the next song.' : '',
     `- Length: ${length}.`,
   ].filter(Boolean).join('\n');
 

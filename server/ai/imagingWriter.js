@@ -6,6 +6,7 @@
 import { store } from '../store.js';
 import { claudeAvailable, claudeJson, checkClaudeCode } from './claude.js';
 import { zoned } from '../util/time.js';
+import { FORMATS } from '../setup/formats.js';
 
 export const FX_CHOICES = ['punch', 'riser', 'smooth', 'stutter', 'music', 'dry'];
 export const PLACEHOLDERS = ['name', 'frequency', 'callSign', 'market', 'slogan', 'website'];
@@ -106,7 +107,7 @@ export function vetPiece(p, { station = store.station, existing = [], today = ''
   // shouting caps read badly on TTS ("ALL" → "A L L"); keep the call sign's letters only
   text = text.replace(/\b[A-Z]{3,}\b/g, (w) => (station.callSign && w === station.callSign.toUpperCase() ? w : w[0] + w.slice(1).toLowerCase()));
   const words = text.replace(/\{\w+\}/g, 'X').split(/\s+/).filter(Boolean).length;
-  const [lo, hi] = WORDS[type];
+  const [lo, hi] = FORMATS[station.formatId]?.imagingWords?.[type] || WORDS[type]; // a joke takes a few more words
   if (words < lo || words > hi) return { ok: false, why: `${words} words (a ${type} is ${lo}-${hi})` };
   if (existing.some((e) => norm(e) === norm(text))) return { ok: false, why: 'duplicate' };
   let expires = /^\d{4}-\d{2}-\d{2}$/.test(p.expires || '') ? p.expires : '';
@@ -199,6 +200,7 @@ async function claudePieces(ctx, mix, guidance) {
     prompt: [
       `Station: ${st.name}${st.slogan ? ` — "${st.slogan}"` : ''}.${st.frequency && st.name.includes(String(st.frequency).replace(/\s*(FM|AM)$/i, '').trim()) ? ' The name already contains the frequency, so never use {name} and {frequency} in the same piece.' : ''} Placeholders available: ${PLACEHOLDERS.filter((k) => ({ name: st.name, frequency: st.frequency, callSign: st.callSign, market: ctx.market, slogan: st.slogan, website: st.website })[k]).map((k) => `{${k}}`).join(' ')}`,
       `Format: ${st.format}`,
+      FORMATS[st.formatId]?.imagingTone ? `Station voice: ${FORMATS[st.formatId].imagingTone}` : '',
       ctx.market ? `Market: ${ctx.market}${st.market?.description ? ` — ${st.market.description}` : ''}` : '',
       `It is ${ctx.when.month} (${ctx.when.season}).${ctx.when.upcoming.length ? ` Coming up: ${ctx.when.upcoming.map((h) => `${h.name} on ${h.date}`).join(', ')}.` : ''}`,
       ctx.dayparts.length ? `Dayparts: ${ctx.dayparts.join('; ')}` : '',

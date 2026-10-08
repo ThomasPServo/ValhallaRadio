@@ -33,7 +33,7 @@ npm start
 Open **http://localhost:8080**. The setup wizard walks you through five steps:
 
 1. **Your station:** name, slogan, call letters and frequency.
-2. **Format:** Top 40, Hot AC, AC, Classic Hits, Classic Rock, Alternative, Country, Hip-Hop & R&B, or Dance.
+2. **Format:** Top 40, Hot AC, AC, Classic Hits, Classic Rock, Alternative, Country, Hip-Hop & R&B, Dance, or Adult Hits (the bored AI).
 3. **Market:** one or more cities or whole counties, units, and *clean versions only*.
 4. **AI & voice:** shows which AI is connected and installs the local voice with one click.
 5. **Launch:** builds a starter library of about 100 songs, asks Claude for fresh picks, renders your imaging and music bed, and goes on air.
@@ -123,6 +123,14 @@ Each format follows its own charts (country follows iTunes Country and the Hot 1
 Every route takes the record radio plays. Sales charts and catalogs also list live takes, remixes, acoustic and sped-up versions ("Careless Whisper (Live in Paris, 1988)"), and those are left out.
 
 **Clean versions only** (on by default): explicit songs are swapped for their clean radio edits, always the same take of the song and never a remix or a live cut. Songs that have no clean version are skipped and never air.
+
+### Adult Hits: the bored AI
+
+A Jack-style variety station with no DJ shows: a wide mix of pop, rock, new wave, R&B and alternative hits from the 70s to the 2010s, in no particular order. It's run by its own AI, Otto, which knows it's an AI, is bored, and plays whatever it wants. Otto is deadpan and sarcastic, mostly at its own expense, never at the listeners'.
+
+- **The identity:** the wizard offers **94.9 Otto**, "Playing whatever I want", for New Bedford and Fall River, Massachusetts, with one click. Your call letters still go on the first page.
+- **On air:** short quips instead of DJ breaks, a sweeper every few songs, no news, traffic or weather shows. Otto voices the station's imaging itself, in a dry, unhurried voice. Legal IDs are in on the joke too: "I'm required to say that every hour. I checked."
+- **The writing:** the DJ prompt flips its "never mention being an AI" rule for this station, and the imaging writer writes in Otto's voice, allowing a few extra words for the punchline.
 
 ### The DJ
 
@@ -304,7 +312,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 173 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 175 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```

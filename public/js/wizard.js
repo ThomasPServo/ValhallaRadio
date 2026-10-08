@@ -2,6 +2,16 @@
 
 import { $, $$, esc, state, api, toast, bus, modal, closeModal } from './core.js';
 
+/** A format's own station identity (name, slogan, dial, market), offered with one click. */
+function suggestion() {
+  const s = state.B.formats.find((f) => f.id === w.formatId)?.suggest;
+  if (!s) return '';
+  const using = w.name === s.name;
+  return `<div class="card" style="margin-top:12px"><div class="small muted">This format comes with its own identity</div>
+    <div style="margin:4px 0"><b>${esc(s.name)}</b>${s.slogan ? ` — “${esc(s.slogan)}”` : ''}${s.locations?.length ? ` · ${esc(s.locations.map((l) => l.split(',')[0]).join(' & '))}` : ''}</div>
+    ${using ? '<span class="small">✓ Using it. Your call letters still go on the first page.</span>' : '<button id="wUseIdentity">Use this identity</button>'}</div>`;
+}
+
 const w = { step: 0, name: '', slogan: '', callSign: '', frequency: '', formatId: 'hotac', locations: '', units: 'imperial', cleanOnly: true, startOnAir: true, building: false, progress: null };
 const STEPS = ['Your station', 'Format', 'Market', 'AI & voice', 'Launch'];
 
@@ -35,7 +45,8 @@ function body() {
     case 1: return `
       <h1>Pick a format</h1>
       <p class="sub">Sets music categories, hour clocks, dayparts, DJs, imaging, music beds and the processing sound. Claude fine-tunes everything to your market.</p>
-      <div class="formats">${B.formats.map((f) => `<button class="format ${w.formatId === f.id ? 'on' : ''}" data-f="${f.id}"><b>${esc(f.name)}</b><span class="small muted">${esc(f.description)}</span></button>`).join('')}</div>`;
+      <div class="formats">${B.formats.map((f) => `<button class="format ${w.formatId === f.id ? 'on' : ''}" data-f="${f.id}"><b>${esc(f.name)}</b><span class="small muted">${esc(f.description)}</span></button>`).join('')}</div>
+      <div id="wSuggest">${suggestion()}</div>`;
     case 2: return `
       <h1>Where are you on the air?</h1>
       <p class="sub">Add your city, several cities, or whole counties. Local weather, traffic and news come from these (no API keys), and the station clock follows the first one.</p>
@@ -102,7 +113,18 @@ function draw() {
   $('#wCancel', el)?.addEventListener('click', () => closeModal());
   $('#wDone', el)?.addEventListener('click', () => { closeModal(); w.progress = null; location.hash = '#studio'; bus.emit('rerender'); });
   $('#wNext', el)?.addEventListener('click', next);
-  $$('.format', el).forEach((b) => b.addEventListener('click', () => { w.formatId = b.dataset.f; $$('.format', el).forEach((x) => x.classList.toggle('on', x === b)); }));
+  $$('.format', el).forEach((b) => b.addEventListener('click', () => {
+    w.formatId = b.dataset.f;
+    $$('.format', el).forEach((x) => x.classList.toggle('on', x === b));
+    $('#wSuggest', el).innerHTML = suggestion();
+  }));
+  $('#wSuggest', el)?.addEventListener('click', (e) => {
+    if (!e.target.closest('#wUseIdentity')) return;
+    const s = state.B.formats.find((f) => f.id === w.formatId)?.suggest;
+    Object.assign(w, { name: s.name, slogan: s.slogan || '', frequency: s.frequency || '', locations: (s.locations || []).join('\n') });
+    $('#wSuggest', el).innerHTML = suggestion();
+    toast(`${s.name} it is`);
+  });
   $('#wKokoro', el)?.addEventListener('click', async (e) => {
     e.target.disabled = true;
     try { await api('POST', '/api/voice/kokoro/install'); state.B.capabilities.voice.kokoro.installing = true; } catch (err) { toast(err.message, true); }

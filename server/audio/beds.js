@@ -14,7 +14,7 @@ const BED_VERSION = 1;
 export const FORMAT_BEDS = {
   chr: 'pulse', hotac: 'pulse', dance: 'pulse',
   ac: 'warm', country: 'warm',
-  classichits: 'drive', classicrock: 'drive', alternative: 'drive',
+  classichits: 'drive', classicrock: 'drive', alternative: 'drive', adulthits: 'drive',
   urban: 'chill',
 };
 

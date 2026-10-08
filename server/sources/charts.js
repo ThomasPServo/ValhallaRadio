@@ -33,6 +33,7 @@ export const FORMAT_CHARTS = {
   country: { charts: ['itunes-country', 'hot100'], gold: [1990, null], genres: /country/i },
   urban: { charts: ['itunes-hiphop', 'itunes-rnb', 'hot100'], gold: [1990, null], genres: /hip.?hop|rap|r&b|soul|trap/i },
   dance: { charts: ['itunes-dance', 'hot100'], gold: [1990, null], genres: /dance|electro|house|edm|techno/i },
+  adulthits: { charts: ['hot100'], gold: [1975, 2015], genres: /pop|rock|alternative|new wave|r&b|soul|dance|disco|funk/i },
 };
 
 /** Charts that only list one style (no format check needed). */

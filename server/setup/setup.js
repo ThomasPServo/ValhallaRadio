@@ -23,7 +23,7 @@ export function applyFormat(formatId, stationPatch = {}) {
   db.station = { ...db.station, ...stationPatch, market: { ...db.station.market, ...(stationPatch.market || {}) }, format: f.format, formatId, setupComplete: true };
   db.categories = f.categories.map((c) => ({ ...c, color: CAT_COLORS[c.id] || '#64748b' }));
 
-  const [music, drive, night] = formatClocks().map((c) => ({ ...c, id: uid('clk_') }));
+  const [music, drive, night] = formatClocks(formatId).map((c) => ({ ...c, id: uid('clk_') }));
   db.clocks = [music, drive, night];
   db.grid = Array.from({ length: 7 }, (_, d) => Array.from({ length: 24 }, (_, h) => {
     if (h <= 5) return night.id;
@@ -32,8 +32,8 @@ export function applyFormat(formatId, stationPatch = {}) {
   }));
 
   db.personas = f.personas.map((p) => ({
-    id: uid('dj_'), name: p.name, style: p.style,
-    voice: { kokoroVoice: p.kokoroVoice, elevenLabsVoiceId: p.elevenLabsVoiceId, openaiVoice: p.openaiVoice, instructions: `Natural, warm radio host. ${p.style}` },
+    id: uid('dj_'), name: p.name, style: p.style, ...(p.aiHost ? { aiHost: true } : {}),
+    voice: { kokoroVoice: p.kokoroVoice, elevenLabsVoiceId: p.elevenLabsVoiceId, openaiVoice: p.openaiVoice, instructions: p.instructions || `Natural, warm radio host. ${p.style}`, ...(p.speed ? { speed: p.speed } : {}) },
   }));
   const [a, b] = [db.personas[0].id, (db.personas[1] || db.personas[0]).id];
   db.dayparts = [
@@ -44,7 +44,9 @@ export function applyFormat(formatId, stationPatch = {}) {
     { id: uid('dp_'), name: 'Evening', startHour: 19, endHour: 23, mood: 'More new music and discovery, energetic early, easing off later.', personaId: b },
   ];
   db.imaging = {
-    voice: { kokoroVoice: formatId === 'classicrock' ? 'am_fenrir' : 'am_michael', elevenLabsVoiceId: 'onwK4e9ZLuTAKqWW03F9', openaiVoice: 'onyx', instructions: 'Deep, powerful, polished radio imaging voice. Punchy and dramatic.' },
+    voice: f.imagingVoice === 'persona'
+      ? { ...db.personas[0].voice }
+      : { kokoroVoice: formatId === 'classicrock' ? 'am_fenrir' : 'am_michael', elevenLabsVoiceId: 'onwK4e9ZLuTAKqWW03F9', openaiVoice: 'onyx', instructions: 'Deep, powerful, polished radio imaging voice. Punchy and dramatic.' },
     items: formatImaging(formatId).map((i) => ({ ...i, id: uid('img_'), file: '', enabled: true })),
   };
   db.processing = { preset: f.processing, overrides: {} };
