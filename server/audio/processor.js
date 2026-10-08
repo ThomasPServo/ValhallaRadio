@@ -155,27 +155,59 @@ class TruePeak {
       for (let t = 0; t < taps; t++) c[t] /= sum; // unity gain at DC for every phase
       this.coefs.push(c);
     }
+    // no interpolated value can exceed (largest |sample| in the window) x (largest sum of |coefficients|):
+    // when that bound is below what the caller cares about, the oversampling can be skipped exactly
+    this.gainBound = Math.max(...this.coefs.map((c) => c.reduce((s, v) => s + Math.abs(v), 0))) * (1 + 1e-9);
     // doubled history so the window is always contiguous (no modulo in the inner loop)
     this.h0 = new Float64Array(taps * 2); this.h1 = new Float64Array(taps * 2);
     this.pos = 0;
+    this.interp = unrolledPhases(this.coefs, taps);
   }
 
-  push(l, r) {
+  /**
+   * Add a sample pair and return the true-peak estimate, or (when `floor` is given) any value no greater
+   * than `floor` if the estimate provably can't exceed it: callers that only compare against a threshold
+   * or a running maximum get the same answer without the 8x oversampling.
+   */
+  push(l, r, floor = -1) {
     const n = this.taps; const h0 = this.h0; const h1 = this.h1;
     h0[this.pos] = l; h0[this.pos + n] = l; h1[this.pos] = r; h1[this.pos + n] = r;
     this.pos = this.pos + 1 === n ? 0 : this.pos + 1;
     const base = this.pos; // oldest sample
     let peak = Math.max(Math.abs(l), Math.abs(r));
-    for (let k = 0; k < this.coefs.length; k++) {
-      const c = this.coefs[k];
-      let a = 0; let b = 0;
-      for (let t = 0; t < n; t++) { a += h0[base + t] * c[t]; b += h1[base + t] * c[t]; }
-      const m = a < 0 ? -a : a; const mb = b < 0 ? -b : b;
-      if (m > peak) peak = m;
-      if (mb > peak) peak = mb;
+    if (floor >= 0) {
+      let m = 0;
+      for (let t = 0; t < n; t++) {
+        const a = h0[base + t]; const b = h1[base + t];
+        const x = a < 0 ? -a : a; const y = b < 0 ? -b : b;
+        if (x > m) m = x;
+        if (y > m) m = y;
+      }
+      if (m * this.gainBound <= floor) return peak; // peak <= m <= floor: same verdict, no oversampling
     }
-    return peak;
+    const ip = this.interp(h0, h1, base);
+    return ip > peak ? ip : peak;
   }
+}
+
+/**
+ * The interpolation filter as straight-line code with its coefficients as constants: about twice as fast
+ * as looping over coefficient arrays, with bit-identical results (same terms, same summation order).
+ */
+const unrolledCache = new Map();
+function unrolledPhases(coefs, taps) {
+  const key = coefs.map((c) => Array.from(c).join(',')).join(';');
+  if (unrolledCache.has(key)) return unrolledCache.get(key);
+  let src = 'let peak = 0;\n';
+  for (let t = 0; t < taps; t++) src += `const a${t} = h0[base + ${t}], b${t} = h1[base + ${t}];\n`;
+  for (const c of coefs) {
+    const sum = (v) => Array.from(c, (k, t) => `${v}${t} * ${k}`).join(' + ');
+    src += `{ let a = ${sum('a')}; let b = ${sum('b')};\n  if (a < 0) a = -a; if (b < 0) b = -b; if (a > peak) peak = a; if (b > peak) peak = b; }\n`;
+  }
+  src += 'return peak;';
+  const fn = new Function('h0', 'h1', 'base', src); // eslint-disable-line no-new-func
+  unrolledCache.set(key, fn);
+  return fn;
 }
 
 /** BS.1770 loudness meter (momentary 400 ms, short-term 3 s, gated integrated). */
@@ -209,13 +241,16 @@ export class LoudnessMeter {
     }
   }
 
+  /** Gated integrated loudness. */
   integrated() {
-    if (!this.gated.length) return -70;
-    const mean = this.gated.reduce((s, v) => s + v, 0) / this.gated.length;
-    const rel = mean * Math.pow(10, -1); // -10 LU
-    const kept = this.gated.filter((v) => v >= rel);
-    const m = kept.reduce((s, v) => s + v, 0) / Math.max(1, kept.length);
-    return -0.691 + 10 * Math.log10(m + 1e-12);
+    const g = this.gated;
+    if (!g.length) return -70;
+    let sum = 0;
+    for (let i = 0; i < g.length; i++) sum += g[i];
+    const rel = (sum / g.length) * Math.pow(10, -1); // -10 LU
+    let kept = 0; let n = 0;
+    for (let i = 0; i < g.length; i++) if (g[i] >= rel) { kept += g[i]; n++; }
+    return -0.691 + 10 * Math.log10(kept / Math.max(1, n) + 1e-12);
   }
 
   reset() { this.gated = []; }
@@ -231,7 +266,8 @@ export class BroadcastProcessor {
     this.sideLp = new Biquad();
     this.eqL = [new Biquad(), new Biquad(), new Biquad(), new Biquad()];
     this.eqR = [new Biquad(), new Biquad(), new Biquad(), new Biquad()];
-    this.agcGainDb = 0; this.agcGain = 1; this.agcMs = 1e-6; this.agcAcc = 0; this.agcN = 0;
+    this.agcGainDb = 0; this.agcGain = 1; this.agcTarget = 1; this.agcMs = 1e-6; this.agcAcc = 0; this.agcN = 0;
+    this.metering = true; // input loudness, true-peak, scope and goniometer: only while someone watches the meters
     this.bandGr = new Float64Array(BANDS); this.bandGain = new Float64Array(BANDS).fill(1); this.bandPeak = new Float64Array(BANDS);
     this.bandGainS = new Float64Array(BANDS).fill(1); // per-sample smoothed (no zipper noise)
     this.ctl = 0;
@@ -242,8 +278,8 @@ export class BroadcastProcessor {
     this.inMeter = new LoudnessMeter(fs); this.outMeter = new LoudnessMeter(fs);
     this.tp = new TruePeak();
     this.limTp = new TruePeak(); // true-peak detection for the limiter (inter-sample overs)
-    this.fft = new FFT(2048); this.scope = new Float32Array(2048); this.scopePos = 0;
-    this.resetInterval();
+    this.fft = new FFT(2048); this.scopeBuf = new Float32Array(2048); this.scopePos = 0; this.gonio = [];
+    this.iv = { inPeakL: 0, inPeakR: 0, outPeakL: 0, outPeakR: 0, tp: 0, limMin: 1, grMax: new Float64Array(BANDS), lr: 0, ll: 0, rr: 0, n: 0 };
     this.setParams(params);
   }
 
@@ -300,7 +336,9 @@ export class BroadcastProcessor {
   }
 
   resetInterval() {
-    this.iv = { inPeakL: 0, inPeakR: 0, outPeakL: 0, outPeakR: 0, tp: 0, limMin: 1, grMax: new Float64Array(BANDS), lr: 0, ll: 0, rr: 0, gonio: [], n: 0 };
+    const iv = this.iv;
+    iv.inPeakL = 0; iv.inPeakR = 0; iv.outPeakL = 0; iv.outPeakR = 0; iv.tp = 0; iv.limMin = 1;
+    iv.grMax.fill(0); iv.lr = 0; iv.ll = 0; iv.rr = 0; iv.n = 0;
   }
 
   /** Process interleaved stereo Float32 audio in place. */
@@ -311,12 +349,13 @@ export class BroadcastProcessor {
     const chL = this.ch[0]; const chR = this.ch[1];
     const width = p.stereo.width;
     const gonioStep = Math.max(1, Math.floor(frames / 96));
+    const metering = this.metering;
     for (let i = 0; i < frames; i++) {
       let l = buf[i * 2]; let r = buf[i * 2 + 1];
       const al = Math.abs(l); const ar = Math.abs(r);
       if (al > iv.inPeakL) iv.inPeakL = al;
       if (ar > iv.inPeakR) iv.inPeakR = ar;
-      this.inMeter.push(l, r);
+      if (metering) this.inMeter.push(l, r);
 
       if (!bypass) {
         const dn = (i & 1) ? 1e-18 : -1e-18; // keeps recursive filters out of denormal range in silence
@@ -342,9 +381,9 @@ export class BroadcastProcessor {
               this.agcGainDb = Math.max(-agc.maxCutDb, Math.min(agc.maxGainDb, this.agcGainDb + step));
             }
           } else if (!agc.enabled) this.agcGainDb = 0;
+          this.agcTarget = dbToLinFast(this.agcGainDb); // only changes at the control rate
         }
-        const tg = dbToLinFast(this.agcGainDb);
-        this.agcGain += (tg - this.agcGain) * 0.002;
+        this.agcGain += (this.agcTarget - this.agcGain) * 0.002;
         l *= this.agcGain; r *= this.agcGain;
 
         // stereo: width on mids/highs, mono bass
@@ -425,12 +464,14 @@ export class BroadcastProcessor {
       const ol = Math.abs(l); const or = Math.abs(r);
       if (ol > iv.outPeakL) iv.outPeakL = ol;
       if (or > iv.outPeakR) iv.outPeakR = or;
-      this.outMeter.push(l, r);
-      const t = this.tp.push(l, r);
-      if (t > iv.tp) iv.tp = t;
-      iv.lr += l * r; iv.ll += l * l; iv.rr += r * r;
-      this.scope[this.scopePos] = (l + r) * 0.5; this.scopePos = (this.scopePos + 1) & 2047;
-      if (i % gonioStep === 0 && iv.gonio.length < 192) iv.gonio.push(l, r);
+      this.outMeter.push(l, r); // always: the loudness auto-trim reads it
+      if (metering) {
+        const t = this.tp.push(l, r, iv.tp); // only needs to know if this beats the interval's maximum
+        if (t > iv.tp) iv.tp = t;
+        iv.lr += l * r; iv.ll += l * l; iv.rr += r * r;
+        this.scopeBuf[this.scopePos] = (l + r) * 0.5; this.scopePos = (this.scopePos + 1) & 2047;
+        if (i % gonioStep === 0 && this.gonio.length < 192) this.gonio.push(l, r);
+      }
     }
     iv.n += frames;
   }
@@ -451,9 +492,9 @@ export class BroadcastProcessor {
     const la = this.la; const c = this.ceil;
     // detect on the 4x oversampled signal so inter-sample peaks stay under the ceiling after decoding;
     // the estimator's ~5 sample delay is well inside the look-ahead window
-    const peak = this.limTp.push(l, r);
     // 0.5 dB true-peak margin: what a decoder's reconstruction (or a 192 kHz meter) sees stays under the ceiling
     const lim = c * 0.944;
+    const peak = this.limTp.push(l, r, lim);
     const req = peak > lim ? lim / peak : 1;
     // sliding-window minimum of required gain (monotonic deque)
     const idx = this.sampleIdx++;
@@ -474,21 +515,17 @@ export class BroadcastProcessor {
     return this._o;
   }
 
-  /** Meter snapshot since the last call (for the engineering UI). */
+  /** Meter-only analysis (input loudness, true peak, scope, goniometer) on or off; the audio is the same either way. */
+  setMetering(on) {
+    if (this.metering === on) return;
+    this.metering = on;
+    if (on) { this.resetInterval(); this.gonio.length = 0; }
+  }
+
+  /** Meter snapshot since the last call (levels, loudness, gain reduction, correlation). */
   meters() {
     const iv = this.iv;
     const corr = iv.ll > 1e-9 && iv.rr > 1e-9 ? iv.lr / Math.sqrt(iv.ll * iv.rr) : 0;
-    // 1/3-octave spectrum of the last 2048 output samples
-    const ordered = new Float64Array(2048);
-    for (let i = 0; i < 2048; i++) ordered[i] = this.scope[(this.scopePos + i) & 2047];
-    const mags = this.fft.magnitudesDb(ordered);
-    const binHz = this.fs / 2048;
-    const spectrum = THIRD_OCTAVES.map((f) => {
-      const lo = Math.max(1, Math.floor((f / 1.122) / binHz)); const hi = Math.max(lo, Math.ceil((f * 1.122) / binHz));
-      let s = -120;
-      for (let b = lo; b <= hi && b < mags.length; b++) s = Math.max(s, mags[b]);
-      return Math.round(s * 10) / 10;
-    });
     const r = (v) => Math.round(v * 10) / 10;
     const snap = {
       in: { peakL: r(linToDb(iv.inPeakL)), peakR: r(linToDb(iv.inPeakR)), m: r(this.inMeter.momentary), s: r(this.inMeter.shortTerm) },
@@ -500,16 +537,43 @@ export class BroadcastProcessor {
       bands: Array.from(iv.grMax, (g) => r(g)),
       limiter: r(-linToDb(iv.limMin)),
       corr: Math.round(corr * 100) / 100,
-      spectrum,
-      gonio: iv.gonio.map((v) => Math.round(v * 1000) / 1000),
       bypass: this.p.bypass,
     };
     this.resetInterval();
     return snap;
   }
 
+  /**
+   * 1/3-octave spectrum (whole dB) of the last 2048 output samples, and goniometer points since the last
+   * call as base64 signed bytes (L, R pairs, full scale = 127).
+   */
+  scope() {
+    if (!this._ordered) {
+      this._ordered = new Float64Array(2048); this._mags = new Float64Array(1024);
+      const binHz = this.fs / 2048;
+      this._bandBins = THIRD_OCTAVES.map((f) => { const lo = Math.max(1, Math.floor((f / 1.122) / binHz)); return [lo, Math.min(1023, Math.max(lo, Math.ceil((f * 1.122) / binHz)))]; });
+    }
+    const ordered = this._ordered;
+    for (let i = 0; i < 2048; i++) ordered[i] = this.scopeBuf[(this.scopePos + i) & 2047];
+    const mags = this.fft.magnitudes(ordered, this._mags);
+    const spectrum = this._bandBins.map(([lo, hi]) => {
+      let m = 0;
+      for (let b = lo; b <= hi; b++) if (mags[b] > m) m = mags[b];
+      return Math.max(-120, Math.round(20 * Math.log10(m + 1e-12))); // one log per band, not per bin
+    });
+    const g = this.gonio;
+    const bytes = Buffer.allocUnsafe(g.length);
+    for (let i = 0; i < g.length; i++) bytes.writeInt8(Math.round((g[i] > 1 ? 1 : g[i] < -1 ? -1 : g[i]) * 127), i);
+    g.length = 0;
+    return { spectrum, gonio: bytes.toString('base64') };
+  }
+
+  /** Integrated loudness for the studio display: recomputed every 5 s of audio (it moves slowly over an hour). */
   loudness() {
-    return { inI: Math.round(this.inMeter.integrated() * 10) / 10, outI: Math.round(this.outMeter.integrated() * 10) / 10 };
+    if (this._loud && this.sampleIdx - this._loudAt < 5 * this.fs) return this._loud;
+    this._loudAt = this.sampleIdx;
+    this._loud = { inI: Math.round(this.inMeter.integrated() * 10) / 10, outI: Math.round(this.outMeter.integrated() * 10) / 10 };
+    return this._loud;
   }
 }
 

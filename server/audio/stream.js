@@ -7,7 +7,12 @@
 // paused and backpressure propagates back to the reader.
 //
 // While decoding we also build the waveform overview (peaks) and measure K-weighted loudness, so
-// analysis needs no extra network traffic.
+// analysis needs no extra network traffic (songs whose analysis and waveform are known skip this).
+//
+// A song from a local file that is prepared but not yet on air can let its ffmpeg go once its read-ahead
+// is full (`releaseWhenIdle`): it holds a few seconds of audio and no process. When playback needs more,
+// ffmpeg starts again from the top and skips what is already decoded (decoding is deterministic, so the
+// join is sample-exact).
 
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
@@ -23,7 +28,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export class StreamDecoder extends EventEmitter {
   /**
-   * @param {{url?: string, file?: string, source?: import('../sources/fetcher.js').TrackFetch, label?: string, maxAheadSec?: number, keepBehindSec?: number, durationHint?: number}} o
+   * @param {{url?: string, file?: string, source?: import('../sources/fetcher.js').TrackFetch, label?: string, maxAheadSec?: number,
+   *   keepBehindSec?: number, durationHint?: number, analyse?: boolean, releaseWhenIdle?: boolean, retain?: {headSec: number, tailSec: number}}} o
+   *   analyse: build peaks and loudness while decoding (default true).
+   *   retain: decode everything without pausing but hold only the head and the tail (for analysis).
    */
   constructor(o) {
     super();
@@ -31,8 +39,14 @@ export class StreamDecoder extends EventEmitter {
     this.source = o.source || null;
     this.file = o.file;
     this.label = o.label || o.url || o.file;
-    this.maxAhead = Math.round((o.maxAheadSec ?? 75) * SR);
+    this.maxAhead = o.retain ? Infinity : Math.round((o.maxAheadSec ?? 75) * SR);
     this.keepBehind = Math.round((o.keepBehindSec ?? 35) * SR);
+    this.analyseOn = o.analyse !== false;
+    this.retain = o.retain ? { head: Math.round(o.retain.headSec * SR), tail: Math.round(o.retain.tailSec * SR) } : null;
+    this.releaseWhenIdle = Boolean(o.releaseWhenIdle && o.file);
+    this.released = false; // ffmpeg let go while waiting for air
+    this.touched = false; // playback has begun
+    this._skip = 0; // bytes to drop after a restart (already decoded)
     this.chunks = []; // { start: frame, data: Int16Array }
     this.decoded = 0;
     this.readPos = 0;
@@ -48,7 +62,7 @@ export class StreamDecoder extends EventEmitter {
     this._rem = null;
     // waveform + loudness accumulators
     const hint = Math.max(60, o.durationHint || 300);
-    this.peaks = new Int8Array(Math.ceil((hint + 30) / PEAK_RES) * 2);
+    this.peaks = new Int8Array(this.analyseOn ? Math.ceil((hint + 30) / PEAK_RES) * 2 : 0);
     this.peakCount = 0;
     this._pk = { lo: 0, hi: 0, n: 0, step: Math.round(SR * PEAK_RES) };
     this._kl = kWeighting(SR); this._kr = kWeighting(SR);
@@ -153,6 +167,10 @@ export class StreamDecoder extends EventEmitter {
   }
 
   _onPcm(buf) {
+    if (this._skip) { // restarted from the top: these bytes were decoded before
+      if (buf.length <= this._skip) { this._skip -= buf.length; return; }
+      buf = buf.subarray(this._skip); this._skip = 0;
+    }
     if (this._rem) { buf = Buffer.concat([this._rem, buf]); this._rem = null; }
     const usable = buf.length - (buf.length % BYTES_PER_FRAME);
     if (usable < buf.length) this._rem = Buffer.from(buf.subarray(usable));
@@ -162,14 +180,45 @@ export class StreamDecoder extends EventEmitter {
     Buffer.from(data.buffer).set(buf.subarray(0, usable));
     const frames = data.length / 2;
     this.chunks.push({ start: this.decoded, data });
-    this._analyse(data);
+    if (this.analyseOn) this._analyse(data);
     this.decoded += frames;
+    if (this.retain) this._dropMiddle();
     if (!this.firstAudioAt) this.firstAudioAt = Date.now();
     if (!this.paused && this.decoded - this.readPos > this.maxAhead) {
-      this.paused = true;
-      this.proc.stdout.pause();
+      if (this.releaseWhenIdle && !this.touched) this._release();
+      else { this.paused = true; this.proc.stdout.pause(); }
     }
     this.emit('progress');
+  }
+
+  /** Analysis keeps the head and the last `tail` frames; the middle is only needed for loudness and peaks. */
+  _dropMiddle() {
+    const cs = this.chunks; const keepFrom = this.decoded - this.retain.tail;
+    let i = 0;
+    while (i < cs.length && cs[i].start < this.retain.head) i++;
+    let j = i;
+    while (j < cs.length - 1 && cs[j].start + cs[j].data.length / 2 <= keepFrom) j++;
+    if (j > i) cs.splice(i, j - i);
+  }
+
+  /** Let ffmpeg go, keeping what's decoded (a prepared song waiting for air). */
+  _release() {
+    const p = this.proc;
+    if (!p || this.released || this.closed) return;
+    this.released = true;
+    this.proc = null;
+    p.removeAllListeners('close');
+    p.stdout.removeAllListeners('data');
+    p.on('error', () => {});
+    try { p.kill('SIGKILL'); } catch { /* already gone */ }
+    this._rem = null; // a partial frame past `decoded`: decoded again after the restart
+  }
+
+  /** Start ffmpeg again from the top, dropping the frames already held. */
+  _restart() {
+    this.released = false;
+    this._skip = this.decoded * BYTES_PER_FRAME;
+    this.start();
   }
 
   _analyse(data) {
@@ -224,6 +273,7 @@ export class StreamDecoder extends EventEmitter {
   get totalFrames() { return this.ended ? this.decoded : null; }
 
   skipTo(frame) {
+    this.touched = true;
     this.readPos = Math.max(0, frame);
     this._maintain();
   }
@@ -233,6 +283,7 @@ export class StreamDecoder extends EventEmitter {
    * gain ramp g0→g1. Returns the number of frames that were actually available (underrun if less).
    */
   mixInto(dst, dstOffset, frames, g0, g1) {
+    this.touched = true;
     let done = 0;
     const want = Math.min(frames, this.decoded - this.readPos);
     let ci = this._findChunk(this.readPos);
@@ -268,9 +319,9 @@ export class StreamDecoder extends EventEmitter {
     // drop audio far behind the playhead
     const keepFrom = this.readPos - this.keepBehind;
     while (this.chunks.length > 1 && this.chunks[0].start + this.chunks[0].data.length / 2 < keepFrom) this.chunks.shift();
-    if (this.paused && this.decoded - this.readPos < this.maxAhead * 0.8) {
-      this.paused = false;
-      this.proc?.stdout.resume();
+    if (this.decoded - this.readPos < this.maxAhead * 0.8) {
+      if (this.released) this._restart();
+      else if (this.paused) { this.paused = false; this.proc?.stdout.resume(); }
     }
   }
 
@@ -304,6 +355,7 @@ export class StreamDecoder extends EventEmitter {
       totalMb: this.totalBytes ? Math.round((this.totalBytes / 1048576) * 10) / 10 : null,
       retries: this.retries,
       source: this.file ? 'local' : this.source ? 'chunked' : 'stream',
+      released: this.released,
       memMb: Math.round((this.chunks.reduce((s, c) => s + c.data.byteLength, 0) / 1048576) * 10) / 10,
     };
   }

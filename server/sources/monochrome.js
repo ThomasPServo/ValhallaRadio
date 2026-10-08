@@ -19,6 +19,7 @@ import * as arcod from './arcod.js';
 import { ensurePeaks } from '../audio/peakFile.js';
 import { queueAnalysis } from '../audio/trackAnalyzer.js';
 import { findTrack } from '../scheduler/library.js';
+import * as cacheIndex from './cacheIndex.js';
 
 const UA = 'ValhallaRadio/0.1 (+radio automation)';
 
@@ -225,7 +226,10 @@ export function fetchTrack(trackId, { priority = 1000 } = {}) {
   } else {
     f = getFetch(id, streamUrl(id), final, { priority });
   }
-  if (!f._pruneHooked) { f._pruneHooked = true; f.done.then((file) => { ensurePeaks(id, file); queueAnalysis(id); pruneCache(); }, () => {}); } // waveform, ending and fade point as soon as the file is in
+  if (!f._pruneHooked) { // waveform, ending and fade point as soon as the file is in
+    f._pruneHooked = true;
+    f.done.then((file) => { cacheIndex.noteFile(path.basename(file)); if (!queueAnalysis(id)) ensurePeaks(id, file); pruneCache(); }, () => {});
+  }
   return f;
 }
 
@@ -246,16 +250,15 @@ export async function download(trackId, { priority = 500 } = {}) {
 }
 
 export function isCached(trackId) {
-  const p = cachedPath(trackId);
-  return fs.existsSync(p) && fs.statSync(p).size > 10000;
+  return cacheIndex.hasSong(path.basename(cachedPath(trackId)));
 }
 
 /** Bytes the finished songs in the cache take. */
 export function cacheBytes() {
-  try {
-    return fs.readdirSync(MUSIC_CACHE_DIR).filter((f) => f.endsWith('.audio')).reduce((s, f) => s + fs.statSync(path.join(MUSIC_CACHE_DIR, f)).size, 0);
-  } catch { return 0; }
+  return cacheIndex.totalBytes();
 }
+
+const cacheLimitBytes = () => (Number(store.settings.musicCacheMaxMb) || 8192) * 1048576;
 
 /**
  * Warm the cache with the library while nothing urgent is fetching: one song at a time, power rotation
@@ -268,10 +271,14 @@ export function startCacheWarmer(songs, { everyMs = 10_000 } = {}) {
     if (store.settings.warmCache === false) return;
     const st = fetcherStatus();
     if (st.songs.some((s) => s.priority >= BACKGROUND) || st.songs.length >= 3) return; // busy, or already warming one
-    if (cacheBytes() > (store.settings.musicCacheMaxMb || 8192) * 1048576 * 0.9) return;
-    const next = songs()
-      .filter((t) => !isCached(t.id))
-      .sort((a, b) => ((order.indexOf(a.category) + 1) || 9) - ((order.indexOf(b.category) + 1) || 9) || (b.plays || 0) - (a.plays || 0))[0];
+    if (cacheBytes() > cacheLimitBytes() * 0.9) return;
+    // the most-played song of the highest-rotation category that isn't cached yet
+    const rank = (t) => (order.indexOf(t.category) + 1) || 9;
+    let next = null;
+    for (const t of songs()) {
+      if (isCached(t.id)) continue;
+      if (!next || rank(t) < rank(next) || (rank(t) === rank(next) && (t.plays || 0) > (next.plays || 0))) next = t;
+    }
     if (next) fetchTrack(next.id, { priority: BACKGROUND });
   };
   const timer = setInterval(tick, everyMs);
@@ -281,27 +288,22 @@ export function startCacheWarmer(songs, { everyMs = 10_000 } = {}) {
 
 /** Keep the music cache under the configured size, evicting least-recently used files. */
 export function pruneCache() {
+  const maxBytes = cacheLimitBytes();
+  if (cacheBytes() <= maxBytes) return; // the usual case: no need to look at the files
   try {
-    const maxBytes = (store.settings.musicCacheMaxMb || 4096) * 1024 * 1024;
-    // partial fetches nobody has touched for two days (a song dropped from the log) are cleared
-    for (const f of fs.readdirSync(MUSIC_CACHE_DIR).filter((x) => x.endsWith('.audio.part'))) {
-      const p = path.join(MUSIC_CACHE_DIR, f);
-      if (activeFetch(f.replace(/\.audio\.part$/, '')) || Date.now() - fs.statSync(p).mtimeMs < 2 * 86400_000) continue;
-      fs.rmSync(p, { force: true });
-      fs.rmSync(`${p}.json`, { force: true });
-    }
     const files = fs.readdirSync(MUSIC_CACHE_DIR)
       .filter((f) => f.endsWith('.audio'))
       .map((f) => {
         const p = path.join(MUSIC_CACHE_DIR, f);
         const st = fs.statSync(p);
-        return { p, size: st.size, t: st.mtimeMs };
+        return { f, p, size: st.size, t: st.mtimeMs };
       })
       .sort((a, b) => a.t - b.t);
     let total = files.reduce((s, f) => s + f.size, 0);
     for (const f of files) {
       if (total <= maxBytes) break;
       fs.rmSync(f.p, { force: true });
+      cacheIndex.noteFile(f.f);
       total -= f.size;
     }
   } catch { /* best effort */ }

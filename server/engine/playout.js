@@ -12,7 +12,7 @@ import { SAMPLE_RATE as SR, CACHE_DIR } from '../config.js';
 import { store } from '../store.js';
 import * as mono from '../sources/monochrome.js';
 import { setPriority, dropFetches, fetcherStatus } from '../sources/fetcher.js';
-import { ensurePeaks, readPeaks } from '../audio/peakFile.js';
+import { ensurePeaks, readPeaks, hasPeaks } from '../audio/peakFile.js';
 import { queueAnalysis, analysisEvents } from '../audio/trackAnalyzer.js';
 import * as library from '../scheduler/library.js';
 import { KIND, estDuration } from '../scheduler/logs.js';
@@ -55,6 +55,9 @@ export class Playout extends EventEmitter {
     this.lastError = null;
     this.level = { l: 0, r: 0 };
     this.processor = new BroadcastProcessor(SR, this.processingParams());
+    this.watchers = { level: 0, meters: 0, scope: 0, timeline: 0, decks: 0 }; // open screens that show each live feed
+    this.processor.setMetering(false); // meter-only analysis runs while a screen shows the meters
+    this.mixBuf = new Float32Array(0); // reused render buffer
     this.bed = null; // the auto-bed source while it's up (or fading)
     this.bedAudio = null; // decoded loop, ready to go
   }
@@ -83,9 +86,9 @@ export class Playout extends EventEmitter {
     this.timer = setInterval(() => this.tick(), 20);
     this.prepTimer = setInterval(() => this.prepLoop(), 700);
     this.ensureTimer = setInterval(() => this.scheduler.ensure().catch((e) => this.fail(e)), 30_000);
-    this.stateTimer = setInterval(() => this.emit('state', this.state()), 1000);
-    this.meterTimer = setInterval(() => this.emit('meters', this.processor.meters()), 50);
-    this.timelineTimer = setInterval(() => this.emit('timeline', this.timeline()), 500);
+    this.stateTimer = setInterval(() => { this.emit('state', this.state()); if (this.watchers.decks) this.emit('decks', this.decksState()); }, 1000);
+    this.meterTimer = setInterval(() => this.emitMeters(), 50);
+    this.timelineTimer = setInterval(() => { if (this.watchers.timeline) this.emit('timeline', this.timeline()); }, 500);
     this.scheduler.ensure().then(() => this.prepLoop()).catch((e) => this.fail(e));
     this.reloadBed();
     log('engine started');
@@ -117,6 +120,20 @@ export class Playout extends EventEmitter {
 
   nowSec() { return this.frame / SR; }
 
+  /**
+   * How many screens show each live feed ({ meters, scope, timeline, decks }). Feeds nobody shows aren't computed,
+   * and with no meters on screen the processor skips its meter-only analysis (the audio is identical).
+   */
+  watch(counts) {
+    Object.assign(this.watchers, counts);
+    this.processor.setMetering(this.watchers.meters + this.watchers.scope > 0);
+  }
+
+  emitMeters() {
+    if (this.watchers.scope) this.emit('scope', this.processor.scope());
+    if (this.watchers.meters) this.emit('meters', this.processor.meters());
+  }
+
   // ------------------------------------------------------------------ real-time loop
 
   tick() {
@@ -130,7 +147,9 @@ export class Playout extends EventEmitter {
     this.maybePlan();
     const buf = this.render(due);
     this.processor.process(buf, due);
-    const out = new Int16Array(due * 2);
+    // a fresh output buffer each time (the encoder pipe may still hold the last one), from Node's pool when small
+    const bytes = Buffer.allocUnsafe(due * 4);
+    const out = new Int16Array(bytes.buffer, bytes.byteOffset, due * 2);
     let pl = 0; let pr = 0;
     for (let i = 0; i < out.length; i += 2) {
       const l = buf[i]; const r = buf[i + 1];
@@ -139,13 +158,17 @@ export class Playout extends EventEmitter {
       if (al > pl) pl = al;
       if (ar > pr) pr = ar;
     }
-    this.level = { l: Math.max(pl, this.level.l * 0.8), r: Math.max(pr, this.level.r * 0.8) };
+    const lv = this.level;
+    lv.l = Math.max(pl, lv.l * 0.8); lv.r = Math.max(pr, lv.r * 0.8);
     this.streamer.write(out);
     this.written += due;
   }
 
   render(frames) {
-    const buf = new Float32Array(frames * 2);
+    const need = frames * 2;
+    if (this.mixBuf.length < need) this.mixBuf = new Float32Array(Math.max(need, 4096));
+    const buf = this.mixBuf.subarray(0, need);
+    buf.fill(0);
     for (let off = 0; off < frames; off += BLOCK) {
       const n = Math.min(BLOCK, frames - off);
       const F = this.frame;
@@ -183,6 +206,9 @@ export class Playout extends EventEmitter {
   }
 
   reap() {
+    let any = false;
+    for (const s of this.sources) if (s.done) { any = true; break; }
+    if (!any) return;
     for (const s of [...this.sources]) {
       if (!s.done) continue;
       this.sources.splice(this.sources.indexOf(s), 1);
@@ -310,7 +336,7 @@ export class Playout extends EventEmitter {
     item.transition = { type: plan.type, notes: plan.notes, at: this.startWall + plan.start * 1000 };
     if (immediate) this.commitCue();
     this.emit('log');
-    this.emit('timeline', this.timeline());
+    if (this.watchers.timeline) this.emit('timeline', this.timeline());
   }
 
   commitCue() {
@@ -420,7 +446,7 @@ export class Playout extends EventEmitter {
     log(`on air: [${item.type}] ${item.artist ? `${item.artist} - ` : ''}${item.title || ''}${item.transition ? ` (${item.transition.type})` : ''}`);
     this.emit('nowPlaying', this.publicItem(item));
     this.emit('state', this.state());
-    this.emit('timeline', this.timeline());
+    if (this.watchers.timeline) this.emit('timeline', this.timeline());
   }
 
   skip() {
@@ -492,7 +518,7 @@ export class Playout extends EventEmitter {
     let n = 0;
     for (const it of songs) {
       if (n >= ahead) break;
-      if (mono.isCached(it.trackId)) { queueAnalysis(it.trackId); continue; } // ending and fade point known before air
+      if (mono.isCached(it.trackId)) { queueAnalysis(it.trackId, { urgent: true }); continue; } // ending and fade point known before air
       n++;
       keep.add(String(it.trackId));
       const f = mono.fetchTrack(it.trackId, { priority: this.preparing.has(it.id) ? 0 : n });
@@ -564,13 +590,16 @@ export class Playout extends EventEmitter {
     // from the cache, or from a chunked fetch that is filling the cache (playback starts on its first bytes)
     const fetch = mono.fetchTrack(track.id, { priority: 0 });
     const local = fetch ? null : mono.cachedPath(track.id);
-    if (local) ensurePeaks(track.id, local); // cached before waveforms were computed up front
+    if (local && !queueAnalysis(track.id, { urgent: true })) ensurePeaks(track.id, local); // the analysis draws the waveform too
+    // a song on disk whose ending is known needs no analysis while it plays: a short read-ahead, no
+    // loudness or waveform pass, and no ffmpeg process at all until it goes to air
+    const light = Boolean(local && cached?.endType);
     const decoder = new StreamDecoder({
-      file: local || undefined, source: fetch || undefined, durationHint: track.duration,
-      maxAheadSec: 75, keepBehindSec: 45, label: `${track.artist} - ${track.title}`,
+      file: local || undefined, source: fetch || undefined, durationHint: track.duration, label: `${track.artist} - ${track.title}`,
+      ...(light ? { maxAheadSec: 15, keepBehindSec: 2, analyse: !hasPeaks(track.id), releaseWhenIdle: true } : { maxAheadSec: 75, keepBehindSec: 45 }),
     }).start();
     try {
-      await this.preroll(decoder, track, fetch ? 240_000 : 45_000);
+      await this.preroll(decoder, track, fetch ? 240_000 : 45_000, cached ? 5 : HEAD_SEC);
       if (fetch) await this.fetchInTime(fetch, track);
     } catch (err) {
       decoder.close();
@@ -604,8 +633,8 @@ export class Playout extends EventEmitter {
     if (fetch.error) throw fetch.error;
   }
 
-  preroll(decoder, track, timeoutMs = 45_000) {
-    const need = Math.round(Math.min(HEAD_SEC, Math.max(5, (track.duration || 200) - 2)) * SR);
+  preroll(decoder, track, timeoutMs = 45_000, needSec = HEAD_SEC) {
+    const need = Math.round(Math.min(needSec, Math.max(5, (track.duration || 200) - 2)) * SR);
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => (decoder.decoded > SR * 12 ? resolve() : reject(new Error('stream too slow'))), timeoutMs);
       const check = () => {
@@ -820,12 +849,15 @@ export class Playout extends EventEmitter {
       icecast: this.streamer.icecastStatus,
       deadAir: this.running && !this.sources.some((s) => !s.done && !s.overlay),
       lastError: this.lastError,
-      decks: this.deckStats(),
-      fetcher: fetcherStatus(),
       bed: { on: Boolean(this.bed?.on), name: this.bedAudio?.name || null, ready: Boolean(this.bedAudio) },
       processing: { preset: this.processor.p.preset, bypass: this.processor.p.bypass, loudness: this.processor.loudness() },
       wall: Date.now(),
     };
+  }
+
+  /** Decoders and song downloads in detail (the engineering screen). */
+  decksState() {
+    return { decks: this.deckStats(), fetcher: fetcherStatus() };
   }
 
   deckStats() {

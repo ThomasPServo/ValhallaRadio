@@ -43,7 +43,10 @@ export async function bedFile(id) {
     const style = id.slice(6);
     if (!BED_STYLES[style]) throw new Error(`unknown bed style "${style}"`);
     const file = path.join(TTS_CACHE_DIR, `bed_${style}_v${BED_VERSION}.wav`);
-    if (fs.existsSync(file)) return file;
+    if (fs.existsSync(file)) {
+      try { const now = new Date(); fs.utimesSync(file, now, now); } catch { /* fine */ } // reuse keeps it from the janitor
+      return file;
+    }
     if (!rendering.has(file)) {
       const tmp = `${file}.${process.pid}.tmp.wav`;
       rendering.set(file, oneShot('bed', { style, out: tmp })

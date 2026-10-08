@@ -1,7 +1,7 @@
 // Studio: the on-air console. Deck with countdowns and waveform, segue timeline, back-timed log,
 // hour clock, carts, live read and program meters — all animated from the live engine state.
 
-import { $, $$, esc, fmtDur, fmtTenths, state, api, run, toast, bus, subscribe, sinceState, sinceTimeline, stationParts, stationTime, KIND, ICON, TYPE_LABEL, catChip } from './core.js';
+import { $, $$, esc, fmtDur, fmtTenths, state, api, run, toast, bus, subscribe, sinceState, sinceTimeline, stationParts, stationTime, KIND, ICON, TYPE_LABEL, catChip, q, setText, setHtml, setStyle } from './core.js';
 import { drawWaveform, drawTimeline, drawHourClock, drawPPM } from './widgets.js';
 
 let raf = 0;
@@ -80,7 +80,8 @@ export function render() {
 }
 
 export function mount() {
-  subscribe(['meters']);
+  subscribe(['meters', 'timeline']);
+  lastMeters = null;
   const mon = $('#monitor');
   $('#vol').value = mon.volume;
   $('#vol').oninput = (e) => { mon.volume = Number(e.target.value); };
@@ -88,7 +89,10 @@ export function mount() {
   renderQueue();
   updateStatic();
   const offs = [bus.on('log', renderQueue), bus.on('state', () => { updateStatic(); renderQueue(); }), bus.on('nowPlaying', updateStatic)];
-  const loop = () => { frame(); raf = requestAnimationFrame(loop); };
+  // 30 frames a second: readings arrive 12-20 times a second and the timeline moves ~13 px/s, so it looks
+  // the same as 60 and costs the browser half as much
+  let drawn = 0;
+  const loop = (t) => { if (t - drawn >= 30) { drawn = t; frame(); } raf = requestAnimationFrame(loop); };
   raf = requestAnimationFrame(loop);
   setupDrag();
   return () => { cancelAnimationFrame(raf); offs.forEach((f) => f()); subscribe([]); };
@@ -118,55 +122,57 @@ function updateStatic() {
   $('#engineNote').textContent = S.lastError ? `⚠ ${S.lastError}` : '';
 }
 
+let lastMeters = null; let segs = []; let segsKey = '';
 function frame() {
   const S = state.S; const n = S.now;
   const pos = n ? Math.min(n.length, n.position + sinceState()) : 0;
   // deck timers
-  const tR = $('#tRemain'); const tI = $('#tIntro');
+  const tR = q('#tRemain'); const tI = q('#tIntro');
   if (!tR) return;
   if (n) {
     const remain = Math.max(0, n.length - pos);
-    tR.querySelector('.v').textContent = fmtTenths(remain);
+    setText(q('#tRemain .v'), fmtTenths(remain));
     tR.classList.toggle('warn', remain <= 30 && remain > 10);
     tR.classList.toggle('end', remain <= 10);
     const intro = n.markers?.intro;
     if (n.type === 'music' && intro != null) {
       const left = intro - pos;
       tI.classList.toggle('vocal', left <= 0);
-      tI.querySelector('.v').textContent = left > 0 ? fmtTenths(left).slice(1) : 'VOCALS';
-    } else tI.querySelector('.v').textContent = n.type === 'music' ? '—' : (n.markers?.voiceEnd ? fmtTenths(Math.max(0, n.markers.voiceEnd - pos)).slice(1) : '—');
-    tI.querySelector('label').textContent = n.type === 'music' ? 'To vocals' : 'Talk left';
-  } else { tR.querySelector('.v').textContent = '--:--.-'; tI.querySelector('.v').textContent = '--'; }
+      setText(q('#tIntro .v'), left > 0 ? fmtTenths(left).slice(1) : 'VOCALS');
+    } else setText(q('#tIntro .v'), n.type === 'music' ? '—' : (n.markers?.voiceEnd ? fmtTenths(Math.max(0, n.markers.voiceEnd - pos)).slice(1) : '—'));
+    setText(q('#tIntro label'), n.type === 'music' ? 'To vocals' : 'Talk left');
+  } else { setText(q('#tRemain .v'), '--:--.-'); setText(q('#tIntro .v'), '--'); }
   // waveform
   const nextIn = S.next ? S.next.in - sinceState() : null;
-  drawWaveform($('#wave'), { peaks: n && state.peaks.get(n.id), length: n?.length || 1, position: pos, markers: n?.type === 'music' ? n.markers : null, nextAt: nextIn != null ? pos + nextIn : null, kind: KIND[n?.type] || 'music' });
+  drawWaveform(q('#wave'), { peaks: n && state.peaks.get(n.id), length: n?.length || 1, position: pos, markers: n?.type === 'music' ? n.markers : null, nextAt: nextIn != null ? pos + nextIn : null, kind: KIND[n?.type] || 'music' });
   // next line
-  const nl = $('#nextLine');
+  const nl = q('#nextLine');
   if (S.next) {
     const notes = S.next.transition?.notes?.[0] || '';
-    nl.innerHTML = `<span class="badge ${KIND[S.next.type]}">NEXT</span> <b>${esc(S.next.title || TYPE_LABEL[S.next.type])}</b> ${S.next.artist ? `· ${esc(S.next.artist)}` : ''} <span class="num">in ${fmtDur(Math.max(0, nextIn))}</span> ${notes ? `<span class="small" style="color:var(--accent)">↪ ${esc(notes)}</span>` : ''}`;
-  } else nl.innerHTML = S.running ? '<span class="muted">Planning the next transition…</span>' : '';
+    setHtml(nl, `<span class="badge ${KIND[S.next.type]}">NEXT</span> <b>${esc(S.next.title || TYPE_LABEL[S.next.type])}</b> ${S.next.artist ? `· ${esc(S.next.artist)}` : ''} <span class="num">in ${fmtDur(Math.max(0, nextIn))}</span> ${notes ? `<span class="small" style="color:var(--accent)">↪ ${esc(notes)}</span>` : ''}`);
+  } else setHtml(nl, S.running ? '<span class="muted">Planning the next transition…</span>' : '');
   // segue timeline
-  drawTimeline($('#timeline'), state.TL.items || [], sinceTimeline(), (id) => state.peaks.get(id));
-  // hour clock
+  drawTimeline(q('#timeline'), state.TL.items || [], sinceTimeline(), (id) => state.peaks.get(id));
+  // hour clock (its elements are worked out once a second)
   const p = stationParts();
-  drawHourClock($('#hourclock'), { segments: hourSegments(p), m: p.m, s: p.s + (Date.now() % 1000) / 1000 });
-  // meters
-  drawPPM($('#ppm'), state.level.l || 0, state.level.r || 0);
+  const key = `${p.h}:${p.m}:${p.s}`;
+  if (key !== segsKey || segs.log !== state.LOG) { segsKey = key; segs = hourSegments(p); segs.log = state.LOG; }
+  drawHourClock(q('#hourclock'), { segments: segs, m: p.m, s: p.s + (Date.now() % 1000) / 1000 });
+  // meters: the PPM moves every frame; the numbers change when new readings arrive (20 a second)
+  drawPPM(q('#ppm'), state.level.l || 0, state.level.r || 0);
   const m = state.meters;
-  if (m) {
-    $('#lufsS').innerHTML = `${m.out.s > -69 ? m.out.s.toFixed(1) : '--'}<small> LUFS</small>`;
-    $('#tp').textContent = `${m.out.tp > -69 ? m.out.tp.toFixed(1) : '--'} dB`;
+  if (m && m !== lastMeters) {
+    lastMeters = m;
+    setHtml(q('#lufsS'), `${m.out.s > -69 ? m.out.s.toFixed(1) : '--'}<small> LUFS</small>`);
+    setText(q('#tp'), `${m.out.tp > -69 ? m.out.tp.toFixed(1) : '--'} dB`);
     const agc = Math.max(-12, Math.min(12, m.agc));
-    const ga = $('#grAgc');
-    ga.style.width = `${Math.abs(agc) / 24 * 100}%`;
-    ga.style.left = agc >= 0 ? '50%' : `${50 - Math.abs(agc) / 24 * 100}%`;
-    $('#grAgcV').textContent = `${agc > 0 ? '+' : ''}${agc.toFixed(1)}`;
-    m.bands.forEach((g, i) => { $(`#gr${i}`).style.width = `${Math.min(100, (g / 15) * 100)}%`; $(`#grV${i}`).textContent = g.toFixed(1); });
-    $('#grLim').style.width = `${Math.min(100, (m.limiter / 10) * 100)}%`;
-    $('#grLimV').textContent = m.limiter.toFixed(1);
+    setStyle(q('#grAgc'), 'transform', `scaleX(${(agc / 12).toFixed(3)})`); // from the centre, either way
+    setText(q('#grAgcV'), `${agc > 0 ? '+' : ''}${agc.toFixed(1)}`);
+    m.bands.forEach((g, i) => { setStyle(q(`#gr${i}`), 'transform', `scaleX(${Math.min(1, g / 15).toFixed(3)})`); setText(q(`#grV${i}`), g.toFixed(1)); });
+    setStyle(q('#grLim'), 'transform', `scaleX(${Math.min(1, m.limiter / 10).toFixed(3)})`);
+    setText(q('#grLimV'), m.limiter.toFixed(1));
   }
-  if (S.processing) $('#lufsI').textContent = S.processing.loudness?.outI > -69 ? S.processing.loudness.outI.toFixed(1) : '--';
+  if (S.processing) setText(q('#lufsI'), S.processing.loudness?.outI > -69 ? S.processing.loudness.outI.toFixed(1) : '--');
 }
 
 /** Elements of the current hour as clock segments (seconds into the hour). */

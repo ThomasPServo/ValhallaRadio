@@ -65,13 +65,13 @@ export function render() {
 }
 
 // ------------------------------------------------------------------ top bar
-let lastSec = -1;
+let lastSec = -1; let lastLevel = null;
 function chrome() {
   const S = state.S;
-  const now = new Date();
-  const p = stationParts(now);
-  if (p.s !== lastSec) {
-    lastSec = p.s;
+  const sec = Math.floor(Date.now() / 1000);
+  if (sec !== lastSec) { // the clock and tally change once a second
+    lastSec = sec;
+    const p = stationParts();
     $('#clock').textContent = `${String(p.h).padStart(2, '0')}:${String(p.m).padStart(2, '0')}:${String(p.s).padStart(2, '0')}`;
     const left = 3600 - (p.m * 60 + p.s);
     $('#toh').textContent = `${String(Math.floor(left / 60)).padStart(2, '0')}:${String(left % 60).padStart(2, '0')}`;
@@ -84,8 +84,8 @@ function chrome() {
     tally.textContent = !S.running ? 'Off air' : dead ? 'Dead air' : 'On air';
     tally.className = `tally ${S.running ? (dead ? 'warn' : 'live') : ''}`;
   }
-  drawBarMeter($('#topMeter'), state.level.l || 0, state.level.r || 0);
-  if (!S.running) state.level = { l: state.level.l * 0.9, r: state.level.r * 0.9 };
+  if (!S.running && (state.level.l > 1e-4 || state.level.r > 1e-4)) state.level = { l: state.level.l * 0.9, r: state.level.r * 0.9 };
+  if (state.level !== lastLevel) { lastLevel = state.level; drawBarMeter($('#topMeter'), state.level.l || 0, state.level.r || 0); } // new readings arrive 12 times a second
   requestAnimationFrame(chrome);
 }
 

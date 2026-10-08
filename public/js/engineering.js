@@ -1,7 +1,7 @@
 // Engineering: the broadcast processor (presets, live controls, bypass), loudness and true-peak
 // metering, spectrum, goniometer, gain reduction per stage, and the streaming decks.
 
-import { $, $$, esc, state, api, toast, bus, subscribe } from './core.js';
+import { $, $$, esc, state, api, toast, bus, subscribe, q, setText, setStyle } from './core.js';
 import { drawSpectrum, drawGonio, drawHistory, drawPPM } from './widgets.js';
 
 const CTL = [
@@ -81,41 +81,47 @@ export function render() {
   </div>`;
 }
 
+let lastMeters = null; let lastScope = null; let ppmAt = 0;
 function frame() {
-  const m = state.meters;
-  if (m && $('#spec')) {
-    const f = (v, u = '') => (v > -69 ? `${v.toFixed(1)}${u}` : '--');
-    $('#rM').textContent = f(m.out.m); $('#rS').textContent = f(m.out.s); $('#rTP').textContent = f(m.out.tp, ' dB');
-    $('#rIn').textContent = f(m.in.s); $('#rAgc').textContent = `${m.agc > 0 ? '+' : ''}${m.agc.toFixed(1)} dB${m.gated ? ' ⏸' : ''}`;
-    $('#rCorr').textContent = m.corr.toFixed(2); $('#rCorr').style.color = m.corr < 0 ? 'var(--red)' : m.corr < 0.3 ? 'var(--yellow)' : '';
-    $('#rLim').textContent = `${m.limiter.toFixed(1)} dB`;
-    $('#rTarget').textContent = `· target ${m.target} · trim ${m.trim > 0 ? '+' : ''}${(m.trim ?? 0).toFixed(1)}`;
-    const li = state.S.processing?.loudness?.outI;
-    $('#rI').textContent = li > -69 ? li.toFixed(1) : '--';
-    $('#rTP').style.color = m.out.tp > -1 ? 'var(--red)' : '';
-    drawSpectrum($('#spec'), m.spectrum);
-    drawGonio($('#gonio'), m.gonio);
-    const now = performance.now();
-    if (now - lastHist > 500) { lastHist = now; hist.push(m.out.s > -69 ? m.out.s : -40); if (hist.length > 240) hist.shift(); }
-    drawHistory($('#lhist'), hist, -14);
-    const agc = Math.max(-12, Math.min(12, m.agc));
-    const ga = $('#eAgc'); ga.style.width = `${(Math.abs(agc) / 24) * 100}%`; ga.style.left = agc >= 0 ? '50%' : `${50 - (Math.abs(agc) / 24) * 100}%`;
-    $('#eAgcV').textContent = `${agc > 0 ? '+' : ''}${agc.toFixed(1)}`;
-    m.bands.forEach((g, i) => { $(`#eB${i}`).style.width = `${Math.min(100, (g / 15) * 100)}%`; $(`#eBV${i}`).textContent = g.toFixed(1); });
-    $('#eLim').style.width = `${Math.min(100, (m.limiter / 10) * 100)}%`; $('#eLimV').textContent = m.limiter.toFixed(1);
-  }
-  if ($('#eppm')) drawPPM($('#eppm'), state.level.l || 0, state.level.r || 0);
   raf = requestAnimationFrame(frame);
+  if (!q('#spec')) return;
+  const m = state.meters;
+  if (m && m !== lastMeters) { // readings arrive 20 times a second; nothing to redraw in between
+    lastMeters = m;
+    const f = (v, u = '') => (v > -69 ? `${v.toFixed(1)}${u}` : '--');
+    setText(q('#rM'), f(m.out.m)); setText(q('#rS'), f(m.out.s)); setText(q('#rTP'), f(m.out.tp, ' dB'));
+    setText(q('#rIn'), f(m.in.s)); setText(q('#rAgc'), `${m.agc > 0 ? '+' : ''}${m.agc.toFixed(1)} dB${m.gated ? ' ⏸' : ''}`);
+    setText(q('#rCorr'), m.corr.toFixed(2)); setStyle(q('#rCorr'), 'color', m.corr < 0 ? 'var(--red)' : m.corr < 0.3 ? 'var(--yellow)' : '');
+    setText(q('#rLim'), `${m.limiter.toFixed(1)} dB`);
+    setText(q('#rTarget'), `· target ${m.target} · trim ${m.trim > 0 ? '+' : ''}${(m.trim ?? 0).toFixed(1)}`);
+    const li = state.S.processing?.loudness?.outI;
+    setText(q('#rI'), li > -69 ? li.toFixed(1) : '--');
+    setStyle(q('#rTP'), 'color', m.out.tp > -1 ? 'var(--red)' : '');
+    const now = performance.now();
+    if (now - lastHist > 500) { lastHist = now; hist.push(m.out.s > -69 ? m.out.s : -40); if (hist.length > 240) hist.shift(); drawHistory(q('#lhist'), hist, -14); }
+    const agc = Math.max(-12, Math.min(12, m.agc));
+    setStyle(q('#eAgc'), 'transform', `scaleX(${(agc / 12).toFixed(3)})`); // from the centre, either way
+    setText(q('#eAgcV'), `${agc > 0 ? '+' : ''}${agc.toFixed(1)}`);
+    m.bands.forEach((g, i) => { setStyle(q(`#eB${i}`), 'transform', `scaleX(${Math.min(1, g / 15).toFixed(3)})`); setText(q(`#eBV${i}`), g.toFixed(1)); });
+    setStyle(q('#eLim'), 'transform', `scaleX(${Math.min(1, m.limiter / 10).toFixed(3)})`); setText(q('#eLimV'), m.limiter.toFixed(1));
+  }
+  if (state.scope && state.scope !== lastScope) {
+    lastScope = state.scope;
+    drawSpectrum(q('#spec'), state.scope.spectrum);
+    drawGonio(q('#gonio'), state.scope.gonio);
+  }
+  const now = performance.now();
+  if (now - ppmAt >= 30 && q('#eppm')) { ppmAt = now; drawPPM(q('#eppm'), state.level.l || 0, state.level.r || 0); } // 30 fps is plenty
 }
 
 function decks() {
   const el = $('#decks');
   if (!el) return;
-  const d = state.S.decks || [];
+  const d = state.D.decks || [];
   el.innerHTML = d.length ? d.map((x) => `<div class="deckrow"><div style="min-width:0"><b class="small">${x.playing ? '▶ ' : ''}${esc(x.title || x.label || '')}</b><div class="small muted">${esc(x.source)} · ${x.mb}${x.totalMb ? `/${x.totalMb}` : ''} MB · ${x.memMb} MB in memory${x.retries ? ` · ${x.retries} resumes` : ''}${x.underrun ? ' · <b style="color:var(--red)">UNDERRUN</b>' : ''}</div></div>
     <div class="bufbar" title="Decoded ahead of the play head"><i style="width:${Math.min(100, (x.aheadSec / 75) * 100)}%;background:${x.aheadSec < 5 && !x.ended ? 'var(--red)' : 'var(--green)'}"></i></div>
     <span class="num small">${x.ended ? 'all' : `${x.aheadSec.toFixed(0)}s`} ahead</span><span class="num small muted">${x.decodedSec.toFixed(0)}s</span></div>`).join('') : '<div class="muted small">No songs loaded. Decks appear here when the station is on air.</div>';
-  const fx = state.S.fetcher;
+  const fx = state.D.fetcher;
   const fe = $('#fetcher');
   if (fe && fx) {
     const kb = (n) => `${Math.round(n / 1024)} KB/s`;
@@ -141,7 +147,8 @@ async function apply(body) {
 }
 
 export function mount() {
-  subscribe(['meters']);
+  subscribe(['meters', 'scope', 'decks']);
+  lastMeters = null; lastScope = null;
   raf = requestAnimationFrame(frame);
   decks();
   timer = setInterval(decks, 1000);

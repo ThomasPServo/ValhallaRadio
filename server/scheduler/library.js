@@ -18,8 +18,23 @@ async function enrich(track) {
   }
 }
 
+// id -> song index, rebuilt when the library array is replaced or changes length; a miss falls back
+// to a scan (and a rebuild), so songs changed in place are still always found
+let byId = null; let byIdLib = null; let byIdLen = -1;
+function indexLibrary(lib) {
+  byId = new Map();
+  for (const t of lib) byId.set(t.id, t);
+  byIdLib = lib; byIdLen = lib.length;
+}
 export function findTrack(id) {
-  return store.data.library.find((t) => t.id === String(id));
+  const lib = store.data.library;
+  const key = String(id);
+  if (byIdLib !== lib || byIdLen !== lib.length) indexLibrary(lib);
+  const hit = byId.get(key);
+  if (hit && hit.id === key) return hit;
+  const found = lib.find((t) => t.id === key);
+  if (found || hit) indexLibrary(lib); // something changed in place: refresh the index
+  return found;
 }
 
 /** Clean-only mode: explicit songs never air (radio edits only). */

@@ -13,6 +13,7 @@ import { store } from '../store.js';
 import { MUSIC_CACHE_DIR, TTS_CACHE_DIR, UPLOAD_DIR } from '../config.js';
 import { PEAKS_DIR } from '../audio/peakFile.js';
 import { activeFetch } from '../sources/fetcher.js';
+import * as cacheIndex from '../sources/cacheIndex.js';
 
 const HOUR = 3600_000; const DAY = 24 * HOUR;
 export const janitorStatus = { lastRun: 0, freedBytes: 0, removed: 0, totalFreed: 0 };
@@ -58,13 +59,15 @@ export function cleanUp(logItems = []) {
   let freed = 0; let removed = 0;
   const add = (r) => { freed += r.freed; removed += r.removed; };
 
-  add(sweep(MUSIC_CACHE_DIR, (name, age) => {
+  const songs = sweep(MUSIC_CACHE_DIR, (name, age) => {
     const id = name.replace(/\.audio(\.part(\.json)?)?$/, '');
     if (activeFetch(id)) return false;
     if (name.endsWith('.part') || name.endsWith('.part.json')) return age > DAY;
     if (name.endsWith('.audio')) return !keep.has(id) && age > DAY;
     return false;
-  }));
+  });
+  if (songs.removed) cacheIndex.rescan();
+  add(songs);
   add(sweep(PEAKS_DIR, (name, age) => name.endsWith('.tmp') ? age > HOUR : !keep.has(name.replace(/\.i8$/, '')) && age > DAY));
   add(sweep(TTS_CACHE_DIR, (name, age) => ttsRule(name.replace(/\.json$/, ''), age)));
 
@@ -86,6 +89,7 @@ export function forgetSong(id, logItems = []) {
   for (const p of [path.join(MUSIC_CACHE_DIR, `${safe(id)}.audio`), path.join(PEAKS_DIR, `${safe(id)}.i8`)]) {
     try { fs.rmSync(p, { force: true }); } catch { /* fine */ }
   }
+  cacheIndex.noteFile(`${safe(id)}.audio`);
 }
 
 export function startJanitor(logItems, { everyMs = HOUR } = {}) {

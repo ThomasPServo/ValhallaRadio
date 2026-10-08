@@ -24,6 +24,8 @@ export const state = {
   TL: { items: [] }, TL_at: 0,
   level: { l: 0, r: 0 },
   meters: null,
+  scope: null,
+  D: { decks: [], fetcher: null }, // decoders and downloads (engineering)
   peaks: new Map(), // id -> { res, data: Int8Array, complete, at }
   setup: null,
 };
@@ -71,7 +73,7 @@ let ws = null;
 let topics = [];
 export function connect() {
   ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`);
-  ws.onopen = () => { if (topics.length) ws.send(JSON.stringify({ type: 'sub', topics })); bus.emit('connected'); };
+  ws.onopen = () => { sendTopics(); bus.emit('connected'); };
   ws.onmessage = (e) => {
     const { type, data } = JSON.parse(e.data);
     if (type === 'state') { state.S = data; state.S_at = performance.now(); }
@@ -79,6 +81,14 @@ export function connect() {
     else if (type === 'log') state.LOG = data;
     else if (type === 'level') state.level = data;
     else if (type === 'meters') state.meters = data;
+    else if (type === 'decks') state.D = data;
+    else if (type === 'scope') {
+      // goniometer points arrive as base64 signed bytes (full scale = 127)
+      const bin = atob(data.gonio);
+      const g = new Float32Array(bin.length);
+      for (let i = 0; i < bin.length; i++) { const b = bin.charCodeAt(i); g[i] = (b > 127 ? b - 256 : b) / 127; }
+      state.scope = { spectrum: data.spectrum, gonio: g };
+    }
     else if (type === 'setup') state.setup = data;
     else if (type === 'peaks') {
       const bin = atob(data.data);
@@ -91,7 +101,11 @@ export function connect() {
   ws.onclose = () => setTimeout(connect, 1500);
 }
 export function send(msg) { if (ws?.readyState === 1) ws.send(JSON.stringify(msg)); }
-export function subscribe(list) { topics = list; send({ type: 'sub', topics }); }
+// Live feeds: the top bar's level on every page, plus what the open view asks for. A tab in the background
+// takes none of them (the server then doesn't compute them either).
+function sendTopics() { send({ type: 'sub', topics: document.hidden ? [] : ['level', ...topics] }); }
+export function subscribe(list) { topics = list; sendTopics(); }
+document.addEventListener('visibilitychange', sendTopics);
 
 /** Ask for waveforms of timeline items we don't have yet (or that are still decoding). */
 export function requestPeaks(items) {
@@ -107,18 +121,53 @@ export function requestPeaks(items) {
   }
 }
 
+// Writing the same text or style again still makes the browser recalculate the page; animation loops
+// use these so only real changes reach the DOM.
+export function setText(el, s) { if (el && el._text !== s) { el._text = s; el.textContent = s; } }
+export function setHtml(el, s) { if (el && el._html !== s) { el._html = s; el.innerHTML = s; } }
+export function setStyle(el, prop, v) { if (!el) return; const c = (el._style ||= {}); if (c[prop] !== v) { c[prop] = v; el.style[prop] = v; } }
+/** querySelector, remembered while the element stays in the page. */
+const found = new Map();
+export function q(sel) { let e = found.get(sel); if (!e || !e.isConnected) { e = document.querySelector(sel); if (e) found.set(sel, e); } return e; }
+
 /** Seconds of the anchored server value now (interpolated between updates). */
 export const sinceState = () => (state.S.running ? (performance.now() - state.S_at) / 1000 : 0);
 export const sinceTimeline = () => (performance.now() - state.TL_at) / 1000;
 
 // ------------------------------------------------------------------ station time
+// Building an Intl.DateTimeFormat is slow (and these run every animation frame and for every log row),
+// so formatters are made once per time zone, and the zone's UTC offset is looked up once a minute.
+const formatters = new Map();
+function formatter(kind, tz) {
+  const key = `${kind}|${tz}`;
+  let f = formatters.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(kind === 'parts' ? 'en-US' : [], { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', ...(kind === 'parts' ? { year: 'numeric', month: 'numeric', day: 'numeric' } : {}) });
+    formatters.set(key, f);
+  }
+  return f;
+}
+const zoneOffset = { tz: null, minute: -1, ms: 0 };
+/** Milliseconds to add to UTC for the station's wall clock at `ms` (offsets only change on a minute). */
+function offsetAt(tz, ms) {
+  const p = formatter('parts', tz).formatToParts(ms);
+  const g = (t) => Number(p.find((x) => x.type === t)?.value || 0);
+  const wall = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour') % 24, g('minute'), g('second'));
+  return wall - (ms - (ms % 1000));
+}
 export function stationParts(date = new Date()) {
   const tz = state.B?.station?.timezone || 'UTC';
-  const p = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(date);
-  const g = (t) => Number(p.find((x) => x.type === t)?.value || 0);
-  return { h: g('hour') % 24, m: g('minute'), s: g('second') };
+  const ms = date.getTime();
+  const minute = Math.floor(ms / 60000);
+  let off;
+  if (Math.abs(ms - Date.now()) < 60000) { // the clock: one lookup a minute
+    if (zoneOffset.tz !== tz || zoneOffset.minute !== minute) Object.assign(zoneOffset, { tz, minute, ms: offsetAt(tz, ms) });
+    off = zoneOffset.ms;
+  } else off = offsetAt(tz, ms);
+  const d = new Date(ms + off);
+  return { h: d.getUTCHours(), m: d.getUTCMinutes(), s: d.getUTCSeconds() };
 }
-export const stationTime = (ms) => new Intl.DateTimeFormat([], { timeZone: state.B?.station?.timezone || 'UTC', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).format(ms);
+export const stationTime = (ms) => formatter('time', state.B?.station?.timezone || 'UTC').format(ms);
 
 // ------------------------------------------------------------------ form helpers
 export const catColor = (id) => state.B?.categories.find((c) => c.id === id)?.color || '#64748b';

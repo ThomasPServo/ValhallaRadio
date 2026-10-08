@@ -1,9 +1,11 @@
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DATA_DIR } from './config.js';
 
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const SAVE_DELAY_MS = 1000;
 
 export const uid = (prefix = '') => prefix + crypto.randomBytes(6).toString('hex');
 
@@ -217,6 +219,7 @@ class Store {
   constructor() {
     this.data = defaultDb();
     this._timer = null;
+    this._dirty = false; this._writing = false; this._gen = 0;
     this.load();
   }
 
@@ -253,15 +256,43 @@ class Store {
     delete s.tomtomApiKey; // traffic is keyless now
   }
 
+  /**
+   * Mark the data changed. Changes are coalesced into at most one write per second (however many
+   * arrive), written compactly and without blocking the real-time audio thread on disk I/O.
+   */
   save() {
-    clearTimeout(this._timer);
-    this._timer = setTimeout(() => this.flush(), 250);
+    this._dirty = true;
+    if (this._timer || this._writing) return; // a write is already on its way and will include this
+    this._timer = setTimeout(() => { this._timer = null; this._write(); }, SAVE_DELAY_MS);
+    this._timer.unref?.();
   }
 
+  async _write() {
+    if (!this._dirty) return;
+    this._dirty = false;
+    this._writing = true;
+    const gen = ++this._gen;
+    const tmp = `${DB_FILE}.tmp`;
+    try {
+      await fsp.writeFile(tmp, JSON.stringify(this.data));
+      if (gen === this._gen) await fsp.rename(tmp, DB_FILE); // a synchronous flush since then wins
+    } catch (err) {
+      console.error('[store] save failed:', err.message);
+      this._dirty = true;
+    } finally {
+      this._writing = false;
+      if (this._dirty) this.save();
+    }
+  }
+
+  /** Write everything now, synchronously (shutdown, tests). */
   flush() {
     clearTimeout(this._timer);
-    const tmp = DB_FILE + '.tmp';
-    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2));
+    this._timer = null;
+    this._gen++;
+    this._dirty = false;
+    const tmp = `${DB_FILE}.sync.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(this.data));
     fs.renameSync(tmp, DB_FILE);
   }
 
@@ -293,3 +324,5 @@ class Store {
 }
 
 export const store = new Store();
+// a change still waiting for its write is never lost when the process ends on its own
+process.on('exit', () => { if (store._dirty || store._timer || store._writing) { try { store.flush(); } catch { /* nothing more to do */ } } });

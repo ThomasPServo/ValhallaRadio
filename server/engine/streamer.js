@@ -6,6 +6,8 @@ import { store } from '../store.js';
 
 const ICY_METAINT = 16000;
 const BURST_BYTES = 96 * 1024; // ~6s at 128k so players start instantly
+const FLUSH_MS = 100; // the encoder's output goes out in 100 ms batches: a few writes per listener per second, not dozens
+const NO_META = Buffer.from([0]);
 
 export class Streamer extends EventEmitter {
   constructor() {
@@ -19,6 +21,8 @@ export class Streamer extends EventEmitter {
     this.title = '';
     this.peakListeners = 0;
     this.stopped = true;
+    this.pending = [];
+    this.flushTimer = null;
   }
 
   start() {
@@ -29,6 +33,9 @@ export class Streamer extends EventEmitter {
 
   stop() {
     this.stopped = true;
+    clearTimeout(this.flushTimer);
+    this.flushTimer = null;
+    this.pending = [];
     this.encoder?.kill('SIGKILL');
     this.icecast?.kill('SIGKILL');
     this.encoder = null;
@@ -39,7 +46,7 @@ export class Streamer extends EventEmitter {
     const br = `${store.data.stream.bitrate || 128}k`;
     const p = spawn(FFMPEG, ['-hide_banner', '-loglevel', 'error', '-f', 's16le', '-ar', String(SAMPLE_RATE), '-ac', String(CHANNELS), '-i', 'pipe:0',
       '-c:a', 'libmp3lame', '-b:a', br, '-f', 'mp3', '-flush_packets', '1', 'pipe:1'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    p.stdout.on('data', (chunk) => this.broadcast(chunk));
+    p.stdout.on('data', (chunk) => this.queue(chunk));
     p.stderr.on('data', (d) => console.warn('[encoder]', String(d).trim()));
     p.stdin.on('error', () => {});
     p.on('close', (code) => {
@@ -90,6 +97,19 @@ export class Streamer extends EventEmitter {
     this.encoder.stdin.write(Buffer.from(int16.buffer, int16.byteOffset, int16.byteLength));
   }
 
+  queue(chunk) {
+    this.pending.push(chunk);
+    this.flushTimer ||= setTimeout(() => this.flush(), FLUSH_MS);
+  }
+
+  flush() {
+    this.flushTimer = null;
+    if (!this.pending.length) return;
+    const chunk = this.pending.length === 1 ? this.pending[0] : Buffer.concat(this.pending);
+    this.pending = [];
+    this.broadcast(chunk);
+  }
+
   broadcast(chunk) {
     this.burst.push(chunk);
     this.burstSize += chunk.length;
@@ -104,6 +124,7 @@ export class Streamer extends EventEmitter {
       return;
     }
     if (!l.icy) { l.res.write(chunk); return; }
+    l.res.cork(); // audio and metadata pieces leave in one write
     let offset = 0;
     while (offset < chunk.length) {
       const n = Math.min(chunk.length - offset, ICY_METAINT - l.sinceMeta);
@@ -115,10 +136,11 @@ export class Streamer extends EventEmitter {
         l.sinceMeta = 0;
       }
     }
+    l.res.uncork();
   }
 
   icyBlock(l) {
-    if (l.lastTitle === this.title) return Buffer.from([0]);
+    if (l.lastTitle === this.title) return NO_META;
     l.lastTitle = this.title;
     const text = `StreamTitle='${this.title.replace(/'/g, '’')}';`;
     const body = Buffer.from(text, 'utf8');

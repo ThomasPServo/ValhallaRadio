@@ -8,6 +8,7 @@ import { store } from '../server/store.js';
 import { MUSIC_CACHE_DIR, TTS_CACHE_DIR, UPLOAD_DIR, FFMPEG } from '../server/config.js';
 import { PEAKS_DIR, computePeaks, ensurePeaks, readPeaks } from '../server/audio/peakFile.js';
 import { cleanUp, forgetSong, ttsRule } from '../server/scheduler/janitor.js';
+import { isCached, cacheBytes, pruneCache } from '../server/sources/monochrome.js';
 
 const HOUR = 3600_000;
 function file(dir, name, ageMs, bytes = 1000) {
@@ -79,4 +80,30 @@ test('a whole song\'s waveform in one pass, matching the 50 ms overview format',
   assert.ok(pk[50 * 2 + 1] >= 8 && pk[50 * 2] <= -8, `the tone shows (${pk[100]}, ${pk[101]})`);
   assert.equal(await ensurePeaks('tone', wav), true);
   assert.equal(readPeaks('tone').length, pk.length);
+});
+
+test('the cache index follows what the janitor and the size limit remove, without rescanning', () => {
+  for (const f of fs.readdirSync(MUSIC_CACHE_DIR)) fs.rmSync(path.join(MUSIC_CACHE_DIR, f), { force: true });
+  const DAY = 24 * HOUR;
+  store.data.library = [{ id: 'a1' }, { id: 'a2' }, { id: 'a3' }];
+  file(MUSIC_CACHE_DIR, 'a1.audio', 3 * DAY, 400_000);
+  file(MUSIC_CACHE_DIR, 'a2.audio', 2 * DAY, 400_000);
+  file(MUSIC_CACHE_DIR, 'a3.audio', 1 * DAY, 400_000);
+  file(MUSIC_CACHE_DIR, 'tiny.audio', 0, 100); // an error page, not a song
+  assert.ok(isCached('a1') && isCached('a3') && !isCached('tiny') && !isCached('nope'));
+  const before = cacheBytes();
+  assert.equal(before, 1_200_100);
+  forgetSong('gone', []); // nothing there: no change
+  file(MUSIC_CACHE_DIR, 'old.audio', 3 * DAY, 300_000);
+  assert.equal(isCached('old'), false, 'a file written behind its back is seen at the next rescan, not before');
+  store.data.library = [{ id: 'a1' }, { id: 'a3' }, { id: 'old' }];
+  forgetSong('a2', []); // gone from the library
+  assert.equal(isCached('a2'), false);
+  assert.equal(cacheBytes(), before - 400_000);
+  store.data.settings.musicCacheMaxMb = 0.6; // 629 KB: evict least recently used
+  try { pruneCache(); } finally { delete store.data.settings.musicCacheMaxMb; }
+  assert.equal(isCached('a1'), false, 'oldest evicted');
+  assert.equal(fs.existsSync(path.join(MUSIC_CACHE_DIR, 'old.audio')), false, 'found by the full look prune takes when over the limit');
+  assert.ok(isCached('a3'));
+  assert.ok(cacheBytes() <= 0.6 * 1048576);
 });

@@ -74,7 +74,7 @@ function libRow(t) {
   const end = t.markers?.endType || a.endType;
   return `<tr data-id="${t.id}" class="${t.disabled ? 'off' : ''}">
     <td><button class="icon" data-action="preview" data-id="${t.id}" data-title="${esc(`${t.artist} – ${t.title}`)}" title="Preview">▶</button></td>
-    <td><div class="songcell"><div class="thumb" style="background-image:url('${esc(t.artwork || '')}')"></div><div style="min-width:0">
+    <td><div class="songcell">${t.artwork ? `<img class="thumb" src="${esc(t.artwork)}" alt="" loading="lazy" decoding="async">` : '<div class="thumb"></div>'}<div style="min-width:0">
       <b>${esc(t.title)}</b> ${t.explicit ? '<span class="badge e" title="Explicit version">E</span>' : t.note === 'clean version' ? '<span class="badge clean" title="Swapped for the clean radio edit">clean</span>' : ''}
       <div class="muted small">${t.chart ? `<span class="badge chart" title="${esc(t.chart.chart)}">#${t.chart.rank}</span> ` : t.chartPeak ? `<span class="badge" title="Chart peak (${esc(t.chartPeak.chart)})">pk #${t.chartPeak.peak}</span> ` : ''}${esc(t.artist)}${t.year ? ` · ${t.year}` : ''}${t.facts?.genre ? ` · ${esc(t.facts.genre)}` : ''}${t.facts?.voice ? ` · ${esc(t.facts.voice)}` : ''}${t.facts?.popularity != null ? ` · <span title="Popularity (Deezer)">★${t.facts.popularity}</span>` : ''}${t.album ? ` · ${esc(t.album)}` : ''}</div></div></div></td>
     <td><select data-change="trackCat">${catOptions(t.category)}</select></td>
@@ -87,12 +87,32 @@ function libRow(t) {
   </tr>`;
 }
 
+// Big libraries render a page of rows at a time; the next page is added as you scroll near the end,
+// so opening the library costs the same with 100 songs or 10,000 (and only visible artwork loads).
+const PAGE_ROWS = 150;
+let moreObserver = null;
+function renderMoreRows() {
+  const rows = $('#libRows');
+  if (!rows) return;
+  $('#libMore', rows)?.remove();
+  const next = ui.lib.slice(ui.shown, ui.shown + PAGE_ROWS);
+  rows.insertAdjacentHTML('beforeend', next.map(libRow).join(''));
+  ui.shown += next.length;
+  if (ui.shown < ui.lib.length) {
+    rows.insertAdjacentHTML('beforeend', `<tr id="libMore"><td colspan="9" class="empty small muted">Showing ${ui.shown} of ${ui.lib.length}…</td></tr>`);
+    moreObserver ||= new IntersectionObserver((entries) => { if (entries.some((e) => e.isIntersecting)) renderMoreRows(); }, { rootMargin: '600px' });
+    moreObserver.observe($('#libMore', rows));
+  }
+}
+
 async function loadLibrary() {
   const items = await api('GET', `/api/library?${new URLSearchParams({ q: ui.q, category: ui.category })}`);
   ui.lib = items;
+  ui.shown = 0;
   const rows = $('#libRows');
   if (!rows) return;
-  rows.innerHTML = items.length ? items.map(libRow).join('') : '<tr><td colspan="9" class="empty">No songs yet — add some from the catalogue, or let the station discover music.</td></tr>';
+  moreObserver?.disconnect();
+  if (items.length) { rows.innerHTML = ''; renderMoreRows(); } else rows.innerHTML = '<tr><td colspan="9" class="empty">No songs yet — add some from the catalogue, or let the station discover music.</td></tr>';
   $('#libCount').textContent = `${items.length} song${items.length === 1 ? '' : 's'}`;
 }
 

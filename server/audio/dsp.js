@@ -139,12 +139,13 @@ export class FFT {
   }
 
   /** Magnitude spectrum (dBFS-ish) of a real signal using a Hann window. */
-  magnitudesDb(signal, out = new Float32Array(this.n / 2)) {
+  /** Hann-windowed magnitude spectrum (linear, sine peak = amplitude) of the first n samples of signal. */
+  magnitudes(signal, out = new Float64Array(this.n / 2)) {
     const n = this.n; const re = this._re ||= new Float64Array(n); const im = this._im ||= new Float64Array(n);
     for (let i = 0; i < n; i++) { re[i] = (signal[i] || 0) * this.window[i]; im[i] = 0; }
     this.transform(re, im);
     const norm = 2 / (n * 0.5);
-    for (let i = 0; i < n / 2; i++) out[i] = 20 * Math.log10(Math.hypot(re[i], im[i]) * norm + 1e-12);
+    for (let i = 0; i < n / 2; i++) out[i] = Math.hypot(re[i], im[i]) * norm;
     return out;
   }
 }

@@ -38,6 +38,7 @@ import { classifyImaging, imagingName } from './audio/imagingImport.js';
 import { startJanitor, forgetSong, janitorStatus } from './scheduler/janitor.js';
 import { computePeaks, ensurePeaks, readPeaks } from './audio/peakFile.js';
 import { cleanTitle } from './sources/arcod.js';
+import { gzipJson, gzipStatic } from './http/compress.js';
 
 const scheduler = new Scheduler();
 const streamer = new Streamer();
@@ -101,10 +102,12 @@ app.use((req, res, next) => {
   res.set('WWW-Authenticate', 'Basic realm="Valhalla Studio"').status(401).send('Authentication required');
 });
 
+app.use(gzipStatic(PUBLIC_DIR)); // the studio's files, pre-compressed in memory
 app.use(express.static(PUBLIC_DIR));
 app.use('/uploads', express.static(UPLOAD_DIR));
 app.use('/tts', express.static(TTS_CACHE_DIR));
 app.use(express.json({ limit: '5mb' }));
+app.use(gzipJson); // big JSON responses gzipped off the main thread
 
 const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((err) => {
   console.error('[api]', req.method, req.path, err.message);
@@ -151,7 +154,7 @@ function bootstrap() {
   };
 }
 app.get('/api/bootstrap', wrap(async (req, res) => { await checkClaudeCode(); res.json(bootstrap()); }));
-app.get('/api/state', (req, res) => res.json(engine.state()));
+app.get('/api/state', (req, res) => res.json({ ...engine.state(), ...engine.decksState() }));
 app.get('/api/timeline', (req, res) => res.json(engine.timeline()));
 app.get('/api/peaks/:id', (req, res) => {
   const p = engine.peaksFor(req.params.id);
@@ -288,13 +291,29 @@ app.get('/api/monochrome/stream/:id', wrap(async (req, res) => {
   } catch { res.destroy(); }
 }));
 
+/** What a library table row shows (the full entries, with analysis, facts and lyric timing, are ~10x bigger). */
+function libraryRow(t) {
+  const m = t.markers; const ly = t.lyrics; const a = t.analysis; const f = t.facts;
+  return {
+    id: t.id, title: t.title, artist: t.artist, album: t.album, year: t.year, artwork: t.artwork, category: t.category,
+    explicit: t.explicit, note: t.note, disabled: t.disabled, plays: t.plays, lastPlayed: t.lastPlayed,
+    chart: t.chart ? { rank: t.chart.rank, chart: t.chart.chart } : undefined,
+    chartPeak: t.chartPeak ? { peak: t.chartPeak.peak, chart: t.chartPeak.chart } : undefined,
+    facts: f ? { genre: f.genre, voice: f.voice, popularity: f.popularity } : undefined,
+    markers: m ? { intro: m.intro, instrumental: m.instrumental, endType: m.endType } : undefined,
+    lyrics: ly ? { status: ly.status, vocalStart: ly.vocalStart } : undefined,
+    analysis: a ? { startSec: a.startSec, endType: a.endType, headTempo: a.headTempo?.bpm ? { bpm: a.headTempo.bpm } : undefined } : undefined,
+  };
+}
+const collator = new Intl.Collator(); // same order as localeCompare, without building a collator per comparison
 app.get('/api/library', (req, res) => {
   const q = String(req.query.q || '').toLowerCase();
   const cat = req.query.category;
   let items = store.data.library;
   if (cat) items = items.filter((t) => t.category === cat);
   if (q) items = items.filter((t) => `${t.artist} ${t.title} ${t.album}`.toLowerCase().includes(q));
-  res.json(items.slice().sort((a, b) => a.artist.localeCompare(b.artist) || a.title.localeCompare(b.title)));
+  items = items.slice().sort((a, b) => collator.compare(a.artist, b.artist) || collator.compare(a.title, b.title));
+  res.json(req.query.full ? items : items.map(libraryRow));
 });
 async function addMany(tracks, category) {
   const added = []; const skipped = [];
@@ -610,17 +629,30 @@ server.on('upgrade', (req, socket, head) => {
     ws.on('message', (raw) => {
       let m;
       try { m = JSON.parse(raw); } catch { return; }
-      if (m.type === 'sub') ws.topics = new Set(m.topics || []);
+      if (m.type === 'sub') {
+        const had = ws.topics;
+        ws.topics = new Set(m.topics || []);
+        countWatchers();
+        // a screen that just opened gets the current picture now rather than at the next update
+        if (!had.has('timeline') && ws.topics.has('timeline')) ws.send(JSON.stringify({ type: 'timeline', data: engine.timeline() }));
+        if (!had.has('decks') && ws.topics.has('decks')) ws.send(JSON.stringify({ type: 'decks', data: engine.decksState() }));
+      }
       if (m.type === 'peaks') {
         const p = engine.peaksFor(m.id);
         if (p) ws.send(JSON.stringify({ type: 'peaks', data: p }));
       }
     });
+    ws.on('close', countWatchers);
     ws.send(JSON.stringify({ type: 'state', data: engine.state() }));
     ws.send(JSON.stringify({ type: 'log', data: scheduler.snapshot() }));
-    ws.send(JSON.stringify({ type: 'timeline', data: engine.timeline() }));
   });
 });
+/** Live feeds (meters, scope, timeline) are computed and sent only while some screen shows them. */
+function countWatchers() {
+  const n = { level: 0, meters: 0, scope: 0, timeline: 0, decks: 0 };
+  for (const c of wss.clients) if (c.readyState === 1) for (const t of c.topics) if (t in n) n[t]++;
+  engine.watch(n);
+}
 function broadcast(type, data, topic) {
   const msg = JSON.stringify({ type, data });
   for (const c of wss.clients) if (c.readyState === 1 && (!topic || c.topics?.has(topic))) c.send(msg);
@@ -633,11 +665,13 @@ const logChanged = () => {
 scheduler.onChange = () => { engine.onLogChange(); logChanged(); };
 engine.on('log', logChanged);
 engine.on('state', (s) => broadcast('state', s));
-engine.on('timeline', (t) => broadcast('timeline', t));
+engine.on('timeline', (t) => broadcast('timeline', t, 'timeline'));
 engine.on('meters', (m) => broadcast('meters', m, 'meters'));
+engine.on('scope', (m) => broadcast('scope', m, 'scope'));
+engine.on('decks', (d) => broadcast('decks', d, 'decks'));
 engine.on('nowPlaying', (i) => { broadcast('nowPlaying', i); logChanged(); });
 setupEvents.on('progress', (p) => broadcast('setup', p));
-setInterval(() => { if (engine.running && wss.clients.size) broadcast('level', engine.level); }, 80);
+setInterval(() => { if (engine.running && engine.watchers.level) broadcast('level', engine.level, 'level'); }, 80);
 
 // locations saved before zones (and states, for traffic feeds) were tracked get them now (offline lookup)
 {

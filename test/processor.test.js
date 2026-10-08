@@ -80,16 +80,37 @@ test('every preset processes 1 s of stereo audio comfortably faster than real ti
   }
 });
 
-test('meter snapshot has spectrum, gain reduction and correlation', () => {
+test('meter snapshot has gain reduction and correlation; the scope has spectrum and goniometer', () => {
   const proc = new BroadcastProcessor(FS, resolveParams('chr'));
   const buf = stereoSine(1, 1000, 0.5);
   proc.process(buf, buf.length / 2);
+  const sc = proc.scope();
   const m = proc.meters();
-  assert.equal(m.spectrum.length, 30);
+  assert.equal(sc.spectrum.length, 30);
   assert.equal(m.bands.length, 5);
   assert.ok(m.corr > 0.99, `mono signal correlation ${m.corr}`);
-  const peakBand = m.spectrum.indexOf(Math.max(...m.spectrum));
+  const peakBand = sc.spectrum.indexOf(Math.max(...sc.spectrum));
   assert.equal([1000][0], [25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000][peakBand], 'spectrum peaks at 1 kHz');
+  const g = new Int8Array(Buffer.from(sc.gonio, 'base64'));
+  assert.ok(g.length > 0 && g.length <= 192 && g.length % 2 === 0, `${g.length} goniometer values`);
+  for (let i = 0; i < g.length; i += 2) assert.equal(g[i], g[i + 1], 'mono: every point on the centre line');
+  assert.equal(proc.scope().gonio, '', 'points are sent once');
+});
+
+test('with no meters on screen the processor skips meter-only work and the audio is identical', () => {
+  const a = new BroadcastProcessor(FS, resolveParams('rock'));
+  const b = new BroadcastProcessor(FS, resolveParams('rock'));
+  b.setMetering(false);
+  const x = programme(3); const y = x.slice();
+  for (let o = 0; o < x.length / 2; o += 882) {
+    const n = Math.min(882, x.length / 2 - o);
+    a.process(x.subarray(o * 2, (o + n) * 2), n);
+    b.process(y.subarray(o * 2, (o + n) * 2), n);
+  }
+  assert.ok(x.every((v, i) => v === y[i]), 'same samples either way');
+  assert.equal(b.meters().in.s, -70, 'input loudness not measured while nobody watches');
+  assert.ok(a.meters().in.s > -30, 'input loudness measured while watched');
+  assert.equal(a.outMeter.integrated(), b.outMeter.integrated(), 'output loudness (for the auto-trim) always measured');
 });
 
 /** A music-like test programme: chords, a bass line and noisy drum hits at about -16 LUFS. */

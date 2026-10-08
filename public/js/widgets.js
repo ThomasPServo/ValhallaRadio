@@ -2,16 +2,68 @@
 
 import { KIND_COLOR } from './core.js';
 
+// Canvas sizes come from a ResizeObserver rather than being read every frame: reading clientWidth after
+// the page has changed forces the browser to lay it out again, once per canvas per frame.
+const sizes = new WeakMap(); // canvas -> { w, h }
+const resized = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver((entries) => {
+  for (const e of entries) {
+    if (!e.target.isConnected) { resized.unobserve(e.target); sizes.delete(e.target); continue; }
+    sizes.set(e.target, { w: e.target.clientWidth, h: e.target.clientHeight });
+  }
+});
+const pixelRatio = () => Math.min(2, window.devicePixelRatio || 1);
+
 /** Size a canvas for the device pixel ratio; returns a 2D context in CSS pixels. */
 export function fit(canvas) {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const w = canvas.clientWidth; const h = canvas.clientHeight;
+  const dpr = pixelRatio();
+  let size = sizes.get(canvas);
+  if (!size || !resized) {
+    size = { w: canvas.clientWidth, h: canvas.clientHeight };
+    sizes.set(canvas, size);
+    resized?.observe(canvas);
+  }
+  const { w, h } = size;
   if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
     canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
   }
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, w, h };
+}
+
+/** An offscreen canvas of w x h CSS pixels at device resolution, painted once by `paint(ctx)`. */
+function makeLayer(w, h, paint) {
+  const dpr = pixelRatio();
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * dpr)); c.height = Math.max(1, Math.round(h * dpr));
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  paint(ctx);
+  return c;
+}
+
+/** Draw columns [sx, sx + sw) of a layer (CSS pixels) at (dx, dy). */
+function blit(ctx, layer, sx, sw, dx, dy, h) {
+  const k = layer.height / h;
+  sw = Math.min(sw, layer.width / k - sx);
+  if (sw <= 0) return;
+  ctx.drawImage(layer, sx * k, 0, sw * k, layer.height, dx, dy, sw, h);
+}
+
+/** A gradient made once per canvas and size (they're the same every frame). */
+const gradients = new WeakMap();
+function gradient(ctx, canvas, key, make) {
+  let g = gradients.get(canvas);
+  if (!g || g.key !== key) { g = { key, value: make(ctx) }; gradients.set(canvas, g); }
+  return g.value;
+}
+
+/** Seconds since this canvas was last drawn (for frame-rate independent decay), at most 0.25. */
+const lastDrawn = new WeakMap();
+function elapsed(canvas) {
+  const now = performance.now(); const prev = lastDrawn.get(canvas) ?? now - 16.7;
+  lastDrawn.set(canvas, now);
+  return Math.min(0.25, Math.max(0, (now - prev) / 1000));
 }
 
 const fmt = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -40,6 +92,8 @@ function marker(ctx, x, h, color, label, top = true) {
   ctx.fillText(label, x + 5, y + 9);
 }
 
+const waveLayers = new WeakMap(); // canvas -> cached waveform layers
+
 /**
  * Full-song waveform with intro/outro/mix markers, played region and the planned next start.
  * @param {{peaks, length, position, markers, nextAt, kind}} o
@@ -55,15 +109,24 @@ export function drawWaveform(canvas, o) {
   // talk windows: instrumental intro (before vocals) and vocal-free outro
   if (m.intro != null && m.intro > 0) { ctx.fillStyle = 'rgba(62,166,255,.10)'; ctx.fillRect(0, 0, x(m.intro), h); }
   if (m.outro != null && m.outro < len) { ctx.fillStyle = 'rgba(177,140,255,.10)'; ctx.fillRect(x(m.outro), 0, w - x(m.outro), h); }
-  for (let px = 0; px < w; px += 2) {
-    const t0 = (px / w) * len; const t1 = ((px + 2) / w) * len;
-    const v = peakAt(o.peaks, t0, t1);
-    const played = t0 < o.position;
-    if (v < 0) { ctx.fillStyle = 'rgba(120,130,150,.18)'; ctx.fillRect(px, mid - 0.5, 1.5, 1); continue; }
-    const bh = Math.max(1, Math.pow(v, 0.8) * (h * 0.46));
-    ctx.fillStyle = played ? 'rgba(130,140,160,.38)' : color;
-    ctx.fillRect(px, mid - bh, 1.5, bh * 2);
+  // the waveform only changes with its data, length or size: drawn once in played and unplayed colours
+  const p = o.peaks; const n = p?.data?.length ?? -1;
+  let L = waveLayers.get(canvas);
+  if (!L || L.p !== p || L.n !== n || L.len !== len || L.w !== w || L.h !== h || L.color !== color) {
+    const paint = (fill) => (c) => {
+      for (let px = 0; px < w; px += 2) {
+        const v = peakAt(p, (px / w) * len, ((px + 2) / w) * len);
+        if (v < 0) { c.fillStyle = 'rgba(120,130,150,.18)'; c.fillRect(px, mid - 0.5, 1.5, 1); continue; }
+        const bh = Math.max(1, Math.pow(v, 0.8) * (h * 0.46));
+        c.fillStyle = fill; c.fillRect(px, mid - bh, 1.5, bh * 2);
+      }
+    };
+    L = { p, n, len, w, h, color, unplayed: makeLayer(w, h, paint(color)), played: makeLayer(w, h, paint('rgba(130,140,160,.38)')) };
+    waveLayers.set(canvas, L);
   }
+  const cut = Math.max(0, Math.min(w, Math.ceil(x(o.position || 0) / 2) * 2)); // columns left of the playhead are played
+  if (cut > 0) blit(ctx, L.played, 0, cut, 0, 0, h);
+  if (cut < w) blit(ctx, L.unplayed, cut, w - cut, cut, 0, h);
   if (m.intro != null && m.intro > 0) marker(ctx, x(m.intro), h, '#3ea6ff', `VOCALS ${fmt(m.intro)}`);
   if (m.outro != null && m.outro < len - 0.5) marker(ctx, x(m.outro), h, '#b18cff', 'VOCALS END');
   if (m.mixOut != null) marker(ctx, x(m.mixOut), h, '#ffb020', m.endType === 'cold' ? 'COLD' : 'MIX', false);
@@ -113,18 +176,11 @@ export function drawTimeline(canvas, items, dt, getPeaks, { before = 12, span = 
     ctx.globalAlpha = it.estimated ? 0.45 : 1;
     ctx.fillStyle = `${color}22`;
     roundRect(ctx, x0, y0, Math.max(2, x1 - x0), y1 - y0, 6); ctx.fill();
-    // waveform inside the block
+    // waveform inside the block: drawn once per item at this scale, then just moved along
     const p = getPeaks(it.id);
-    if (p) {
-      const mid = (y0 + y1) / 2; const hh = (y1 - y0) / 2 - 3;
-      ctx.fillStyle = `${color}cc`;
-      for (let px = x0; px < x1; px += 2) {
-        const t = ((px / w) * span - before) - s;
-        const v = peakAt(p, t, t + (span / w) * 2);
-        if (v < 0) continue;
-        const bh = Math.max(0.5, Math.pow(v, 0.8) * hh);
-        ctx.fillRect(px, mid - bh, 1.4, bh * 2);
-      }
+    if (p?.data?.length) {
+      const strip = itemStrip(it, p, w / span, y1 - y0, color);
+      blit(ctx, strip, x0 - X(s), x1 - x0, x0, y0, y1 - y0);
     }
     // gain automation (fade x duck)
     if (it.fade || it.duck) {
@@ -160,12 +216,35 @@ export function drawTimeline(canvas, items, dt, getPeaks, { before = 12, span = 
     ctx.restore();
     ctx.globalAlpha = 1;
   }
+  if (strips.size > items.length + 8) for (const id of strips.keys()) if (!assigned.has(id)) strips.delete(id);
   // NOW line
   const nx = X(0);
   ctx.fillStyle = '#ff2d3d'; ctx.shadowColor = '#ff2d3d'; ctx.shadowBlur = 10;
   ctx.fillRect(nx - 1, 0, 2, h);
   ctx.shadowBlur = 0;
   ctx.font = '800 9px Inter, system-ui, sans-serif'; ctx.fillText('NOW', nx + 4, 9);
+}
+
+const strips = new Map(); // timeline item id -> its waveform at the current scale
+function itemStrip(it, p, pps, height, color) {
+  let st = strips.get(it.id);
+  const n = p.data.length;
+  if (!st || st.p !== p || st.n !== n || st.len !== it.len || st.pps !== pps || st.height !== height || st.color !== color) {
+    const width = Math.ceil(Math.max(0, it.len) * pps) + 2;
+    const mid = height / 2; const hh = height / 2 - 3;
+    const c = makeLayer(width, height, (cx) => {
+      cx.fillStyle = `${color}cc`;
+      for (let px = 0; px < width; px += 2) {
+        const v = peakAt(p, px / pps, (px + 2) / pps);
+        if (v < 0) continue;
+        const bh = Math.max(0.5, Math.pow(v, 0.8) * hh);
+        cx.fillRect(px, mid - bh, 1.4, bh * 2);
+      }
+    });
+    st = { p, n, len: it.len, pps, height, color, c };
+    strips.set(it.id, st);
+  }
+  return st.c;
 }
 
 function laneValue(pts, t) {
@@ -191,29 +270,39 @@ function roundRect(ctx, x, y, w, h, r) {
  * Broadcast hour clock: this hour's elements as arcs, sweeping second hand, time to the top.
  * @param {{segments: {from:number,to:number,kind:string}[], m:number, s:number}} o (seconds in hour)
  */
+const faces = new WeakMap(); // canvas -> { key, layer }: the dial changes when the hour's elements do
 export function drawHourClock(canvas, o) {
   const { ctx, w, h } = fit(canvas);
   ctx.clearRect(0, 0, w, h);
   const cx = w / 2; const cy = h / 2; const R = Math.min(w, h) / 2 - 6;
   const ang = (sec) => (sec / 3600) * Math.PI * 2 - Math.PI / 2;
   const nowSec = o.m * 60 + o.s;
-  ctx.lineWidth = R * 0.16;
-  ctx.strokeStyle = 'rgba(255,255,255,.05)';
-  ctx.beginPath(); ctx.arc(cx, cy, R * 0.86, 0, Math.PI * 2); ctx.stroke();
-  for (const seg of o.segments) {
-    ctx.strokeStyle = KIND_COLOR[seg.kind] || '#888';
-    ctx.globalAlpha = seg.to < nowSec ? 0.28 : 0.95;
-    ctx.beginPath(); ctx.arc(cx, cy, R * 0.86, ang(Math.max(0, seg.from)), ang(Math.min(3600, seg.to - 4))); ctx.stroke();
+  let key = `${w}x${h}`;
+  for (const seg of o.segments) key += `|${Math.round(seg.from)},${Math.round(seg.to)},${seg.kind},${seg.to < nowSec ? 1 : 0}`;
+  let face = faces.get(canvas);
+  if (!face || face.key !== key) {
+    face = { key, layer: makeLayer(w, h, (c) => {
+      c.lineWidth = R * 0.16;
+      c.strokeStyle = 'rgba(255,255,255,.05)';
+      c.beginPath(); c.arc(cx, cy, R * 0.86, 0, Math.PI * 2); c.stroke();
+      for (const seg of o.segments) {
+        c.strokeStyle = KIND_COLOR[seg.kind] || '#888';
+        c.globalAlpha = seg.to < nowSec ? 0.28 : 0.95;
+        c.beginPath(); c.arc(cx, cy, R * 0.86, ang(Math.max(0, seg.from)), ang(Math.min(3600, seg.to - 4))); c.stroke();
+      }
+      c.globalAlpha = 1;
+      // ticks
+      for (let i = 0; i < 60; i++) {
+        const a = (i / 60) * Math.PI * 2 - Math.PI / 2; const long = i % 5 === 0;
+        c.strokeStyle = long ? 'rgba(232,235,242,.7)' : 'rgba(232,235,242,.22)';
+        c.lineWidth = long ? 2 : 1;
+        c.beginPath(); c.moveTo(cx + Math.cos(a) * R * (long ? 0.66 : 0.7), cy + Math.sin(a) * R * (long ? 0.66 : 0.7));
+        c.lineTo(cx + Math.cos(a) * R * 0.74, cy + Math.sin(a) * R * 0.74); c.stroke();
+      }
+    }) };
+    faces.set(canvas, face);
   }
-  ctx.globalAlpha = 1;
-  // ticks
-  for (let i = 0; i < 60; i++) {
-    const a = (i / 60) * Math.PI * 2 - Math.PI / 2; const long = i % 5 === 0;
-    ctx.strokeStyle = long ? 'rgba(232,235,242,.7)' : 'rgba(232,235,242,.22)';
-    ctx.lineWidth = long ? 2 : 1;
-    ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * R * (long ? 0.66 : 0.7), cy + Math.sin(a) * R * (long ? 0.66 : 0.7));
-    ctx.lineTo(cx + Math.cos(a) * R * 0.74, cy + Math.sin(a) * R * 0.74); ctx.stroke();
-  }
+  ctx.drawImage(face.layer, 0, 0, w, h);
   // minute hand (position in hour) and second hand
   const ma = ang(nowSec);
   ctx.strokeStyle = '#ffb020'; ctx.lineWidth = 3; ctx.lineCap = 'round';
@@ -237,16 +326,19 @@ export function drawPPM(canvas, l, r) {
   const { ctx, w, h } = fit(canvas);
   ctx.clearRect(0, 0, w, h);
   const hold = holds.get(canvas) || { l: -60, r: -60, tl: 0, tr: 0 };
-  const now = performance.now();
+  const now = performance.now(); const fall = 36 * elapsed(canvas); // peak hold falls 36 dB/s
   const scale = (db) => Math.pow(Math.max(0, Math.min(1, (db + 60) / 60)), 1.6);
   const bw = (w - 18) / 2;
+  const g = gradient(ctx, canvas, h, (c) => {
+    const gr = c.createLinearGradient(0, h, 0, 0);
+    gr.addColorStop(0, '#16a34a'); gr.addColorStop(scale(-12), '#22d36b'); gr.addColorStop(scale(-9), '#f6c445'); gr.addColorStop(scale(-3), '#ff9f1c'); gr.addColorStop(1, '#ff4b55');
+    return gr;
+  });
   [[l, 'l'], [r, 'r']].forEach(([v, k], i) => {
     const db = dbOf(v);
-    if (db > hold[k] || now - hold[`t${k}`] > 1500) { if (db > hold[k]) hold[`t${k}`] = now; hold[k] = Math.max(db, hold[k] - 0.6); }
+    if (db > hold[k] || now - hold[`t${k}`] > 1500) { if (db > hold[k]) hold[`t${k}`] = now; hold[k] = Math.max(db, hold[k] - fall); }
     const x = 16 + i * (bw + 2);
     ctx.fillStyle = '#080b11'; ctx.fillRect(x, 0, bw, h);
-    const g = ctx.createLinearGradient(0, h, 0, 0);
-    g.addColorStop(0, '#16a34a'); g.addColorStop(scale(-12), '#22d36b'); g.addColorStop(scale(-9), '#f6c445'); g.addColorStop(scale(-3), '#ff9f1c'); g.addColorStop(1, '#ff4b55');
     const hh = scale(db) * h;
     ctx.fillStyle = g; ctx.fillRect(x, h - hh, bw, hh);
     ctx.fillStyle = hold[k] > -3 ? '#ff4b55' : '#e8ebf2';
@@ -262,11 +354,14 @@ export function drawBarMeter(canvas, l, r) {
   const { ctx, w, h } = fit(canvas);
   ctx.clearRect(0, 0, w, h);
   const scale = (v) => Math.pow(Math.max(0, Math.min(1, (dbOf(v) + 60) / 60)), 1.6);
+  const g = gradient(ctx, canvas, w, (c) => {
+    const gr = c.createLinearGradient(0, 0, w, 0);
+    gr.addColorStop(0, '#16a34a'); gr.addColorStop(0.75, '#22d36b'); gr.addColorStop(0.88, '#f6c445'); gr.addColorStop(1, '#ff4b55');
+    return gr;
+  });
   [l, r].forEach((v, i) => {
     const y = i * (h / 2 + 1); const bh = h / 2 - 1;
     ctx.fillStyle = '#10141c'; ctx.fillRect(0, y, w, bh);
-    const g = ctx.createLinearGradient(0, 0, w, 0);
-    g.addColorStop(0, '#16a34a'); g.addColorStop(0.75, '#22d36b'); g.addColorStop(0.88, '#f6c445'); g.addColorStop(1, '#ff4b55');
     ctx.fillStyle = g; ctx.fillRect(0, y, scale(v) * w, bh);
   });
 }
@@ -278,12 +373,16 @@ export function drawSpectrum(canvas, bands) {
   if (!bands) return;
   const holdArr = specHold.get(canvas) || bands.map(() => -90);
   const n = bands.length; const bw = w / n;
+  const fall = 48 * elapsed(canvas); // peak hold falls 48 dB/s
+  const g = gradient(ctx, canvas, h, (c) => {
+    const gr = c.createLinearGradient(0, h, 0, 0);
+    gr.addColorStop(0, '#1d4ed8'); gr.addColorStop(0.6, '#3ea6ff'); gr.addColorStop(1, '#a5f3fc');
+    return gr;
+  });
   for (let i = 0; i < n; i++) {
     const v = Math.max(0, Math.min(1, (bands[i] + 80) / 80));
-    holdArr[i] = Math.max(bands[i], holdArr[i] - 0.8);
+    holdArr[i] = Math.max(bands[i], holdArr[i] - fall);
     const hv = Math.max(0, Math.min(1, (holdArr[i] + 80) / 80));
-    const g = ctx.createLinearGradient(0, h, 0, 0);
-    g.addColorStop(0, '#1d4ed8'); g.addColorStop(0.6, '#3ea6ff'); g.addColorStop(1, '#a5f3fc');
     ctx.fillStyle = g;
     ctx.fillRect(i * bw + 1, h - v * h, bw - 2, v * h);
     ctx.fillStyle = '#e8ebf2'; ctx.fillRect(i * bw + 1, h - hv * h - 1, bw - 2, 2);
@@ -296,7 +395,8 @@ export function drawSpectrum(canvas, bands) {
 /** Goniometer (M/S vectorscope) with phosphor persistence. */
 export function drawGonio(canvas, pts) {
   const { ctx, w, h } = fit(canvas);
-  ctx.fillStyle = 'rgba(8,11,17,.32)'; ctx.fillRect(0, 0, w, h);
+  const fade = 1 - Math.pow(0.68, elapsed(canvas) * 60); // the same persistence at any redraw rate
+  ctx.fillStyle = `rgba(8,11,17,${fade.toFixed(3)})`; ctx.fillRect(0, 0, w, h);
   const cx = w / 2; const cy = h / 2; const R = Math.min(w, h) * 0.46;
   ctx.strokeStyle = 'rgba(255,255,255,.07)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.moveTo(cx - R, cy - R); ctx.lineTo(cx + R, cy + R); ctx.moveTo(cx + R, cy - R); ctx.lineTo(cx - R, cy + R);
