@@ -7,13 +7,14 @@ import * as mono from '../sources/monochrome.js';
 import * as library from '../scheduler/library.js';
 import { FORMATS, formatImaging, formatClocks } from './formats.js';
 import { claudeAvailable } from '../ai/claude.js';
+import { altVersion } from '../sources/versions.js';
 import { discover } from '../ai/musicDirector.js';
 
 export const setupEvents = new EventEmitter();
 let job = null;
 
 const CAT_COLORS = { A: '#ef4444', B: '#f97316', C: '#eab308', G: '#22c55e', N: '#3b82f6' };
-const SKIP = /\b(remix|live|acoustic|instrumental|sped up|slowed|karaoke|demo|extended|club mix|commentary|a cappella|reprise|interlude|skit)\b/i;
+const NOT_A_SONG = /\b(commentary|interlude|skit)\b/i;
 
 export function applyFormat(formatId, stationPatch = {}) {
   const f = FORMATS[formatId];
@@ -79,7 +80,7 @@ async function seedArtist(name, f, perArtist) {
   const tops = [...info.topTracks].sort((a, b) => Number(library.isCompilation(a.album)) - Number(library.isCompilation(b.album)));
   for (const t of tops) {
     if (added.length >= perArtist) break;
-    if (SKIP.test(t.title) || t.duration < 90 || t.duration > 480) continue;
+    if (altVersion(t.title) || NOT_A_SONG.test(t.title) || t.duration < 90 || t.duration > 480) continue;
     const k = norm(t.title);
     if (seen.has(k)) continue;
     seen.add(k);

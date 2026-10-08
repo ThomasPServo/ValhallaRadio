@@ -2,6 +2,7 @@ import './helpers.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { pickCleanCandidate, matchTitle } from '../server/sources/clean.js';
+import { altVersion } from '../server/sources/versions.js';
 import { store } from '../server/store.js';
 import * as library from '../server/scheduler/library.js';
 import { candidatesFor } from '../server/scheduler/rotation.js';
@@ -36,6 +37,23 @@ test('refuses remixes, other artists, and versions of a very different length', 
     { id: 'o', title: 'HUMBLE.', artist: 'A Cover Band', duration: 177, explicit: false },
     { id: 'l', title: 'HUMBLE.', artist: 'Kendrick Lamar', duration: 240, explicit: false },
   ]), null);
+});
+
+test('a take label marks another version of the song; the words in a song title do not', () => {
+  assert.equal(altVersion('Careless Whisper (Live in Paris, 1988)'), 'live');
+  assert.equal(altVersion('So What (Bimbo Jones Radio Mix)'), 'mix');
+  assert.equal(altVersion('HUMBLE. - SKRILLEX REMIX'), 'remix');
+  assert.equal(altVersion('Unwritten (Acoustic)'), 'acoustic');
+  for (const song of ['Alive', 'Live Your Life', 'Wake Me Up - Radio Edit', 'Dreams - 2004 Remaster', 'Here Comes The Sun - 2019 Mix', "Shake It Off (Taylor's Version)", 'Stay (with Justin Bieber)']) {
+    assert.equal(altVersion(song), null, song);
+  }
+});
+
+test("a clean swap never trades the record for a remixer's mix", () => {
+  const soWhat = { id: 'e', title: 'So What', artist: 'P!nk', duration: 215, explicit: true };
+  const mix = { id: 'm', title: 'So What (Bimbo Jones Radio Mix)', artist: 'P!nk', duration: 216, explicit: false };
+  assert.equal(pickCleanCandidate(soWhat, [mix]), null);
+  assert.equal(pickCleanCandidate(soWhat, [mix, { id: 'c', title: 'So What (Radio Edit)', artist: 'P!nk', duration: 213, explicit: false }]).id, 'c');
 });
 
 test('clean-only mode keeps explicit songs out of every rotation pool', () => {
@@ -89,4 +107,6 @@ test('discovery only accepts a catalogue match by the suggested artist', async (
   assert.ok(matchScore({ artist: 'Riley Green', title: 'you look like you love me' }, { artist: 'Ella Langley, Riley Green', title: 'you look like you love me' }) >= 75, 'featured artist credit');
   assert.ok(matchScore({ artist: 'The Killers', title: 'Mr. Brightside' }, { artist: 'Killers', title: 'Mr. Brightside' }) >= 75);
   assert.ok(matchScore({ artist: 'Riley Green', title: 'Worst Way' }, { artist: 'Riley Green', title: 'Worst Way (Live)' }) < 75, 'no live versions');
+  assert.ok(matchScore({ artist: 'George Michael', title: 'Careless Whisper' }, { artist: 'George Michael', title: 'Careless Whisper (Live in Paris, 1988)' }) < 75);
+  assert.equal(matchScore({ artist: 'Sia', title: 'Alive' }, { artist: 'Sia', title: 'Alive' }), 100, 'a song with "live" in its name');
 });

@@ -3,8 +3,7 @@
 // usually be swapped for its clean twin automatically.
 
 import * as mono from './monochrome.js';
-
-const BAD_VARIANT = /\b(remix|live|acoustic|instrumental|sped up|slowed|karaoke|a cappella|acapella|cover|tribute)\b/i;
+import { altVersion } from './versions.js';
 
 /** Title for matching: no featured artists, no "(Radio Edit)"-style suffixes, no punctuation. */
 export const matchTitle = (s) => String(s || '')
@@ -19,17 +18,18 @@ export const artistKeys = (a) => String(a || '').toLowerCase().normalize('NFD').
 
 /**
  * Choose the clean twin of `original` among candidate tracks (pure, unit tested).
- * Same song title, at least one shared artist, a similar length, not explicit, not a remix/live cut.
+ * Same song title, at least one shared artist, a similar length, not explicit, the same take (no remix
+ * or live cut standing in for the record).
  */
 export function pickCleanCandidate(original, candidates) {
   const title = matchTitle(original.title);
   const artists = new Set(artistKeys(original.artist));
-  const variantOk = (t) => !BAD_VARIANT.test(t) || BAD_VARIANT.test(original.title);
+  const take = altVersion(original.title);
   let best = null;
   let bestScore = -Infinity;
   for (const c of candidates || []) {
     if (!c || c.explicit || c.id === original.id || c.playable === false) continue;
-    if (matchTitle(c.title) !== title || !variantOk(c.title)) continue;
+    if (matchTitle(c.title) !== title || altVersion(c.title) !== take) continue;
     if (!artistKeys(c.artist).some((a) => artists.has(a))) continue;
     const dd = original.duration && c.duration ? Math.abs(c.duration - original.duration) : 0;
     if (dd > 12) continue;

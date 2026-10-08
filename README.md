@@ -118,7 +118,9 @@ Each format follows its own charts (country follows iTunes Country and the Hot 1
 - **Catalog only:** Valhalla finds artists related to the ones the category already plays (from Deezer's listener graph), pulls their real catalog songs and keeps only songs in the category's era. An AI, if one is connected, then ranks those candidates; without one, Valhalla ranks them by popularity. Either way, the AI never has to recall a song from memory.
 - **Auto** (the default) tries charts first, then AI suggestions (with Claude or ChatGPT, not local models), then related artists, until the category is full.
 
-**Clean versions only** (on by default): explicit songs are swapped for their clean radio edits. Songs that have no clean version are skipped and never air.
+Every route takes the record radio plays. Sales charts and catalogs also list live takes, remixes, acoustic and sped-up versions ("Careless Whisper (Live in Paris, 1988)"), and those are left out.
+
+**Clean versions only** (on by default): explicit songs are swapped for their clean radio edits, always the same take of the song and never a remix or a live cut. Songs that have no clean version are skipped and never air.
 
 ### The DJ
 

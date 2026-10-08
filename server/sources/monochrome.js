@@ -20,6 +20,7 @@ import { ensurePeaks } from '../audio/peakFile.js';
 import { queueAnalysis } from '../audio/trackAnalyzer.js';
 import { findTrack } from '../scheduler/library.js';
 import * as cacheIndex from './cacheIndex.js';
+import { altVersion } from './versions.js';
 
 const UA = 'ValhallaRadio/0.1 (+radio automation)';
 
@@ -162,7 +163,8 @@ export function matchScore(want, got) {
   }
   if (!title || !artist) return 0;
   let score = title + artist;
-  if (/remix|live|karaoke|instrumental|sped up|slowed|acoustic/i.test(got.title) && !/remix|live|acoustic/i.test(want.title)) score -= 30;
+  const alt = altVersion(got.title);
+  if (alt && alt !== altVersion(want.title)) score -= 30; // a live take or remix that wasn't asked for
   return score;
 }
 

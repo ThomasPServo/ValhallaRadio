@@ -11,6 +11,7 @@ import { weekdayName, spokenTime } from '../util/time.js';
 import { factLine, relatedArtists, itunesGenre } from '../sources/songFacts.js';
 import { songInfo, infoText } from '../sources/songInfo.js';
 import { getChart, stationCharts, chartHits, sameSong, genreChart, FORMAT_CHARTS } from '../sources/charts.js';
+import { altVersion } from '../sources/versions.js';
 import { FORMATS } from '../setup/formats.js';
 import { claudeProvider } from './claude.js';
 
@@ -277,6 +278,7 @@ export async function discoverFromCharts({ category = 'N', count = 10, guidance 
   pool = pool.filter((e) => {
     if (store.data.library.some((t) => sameSong(t, e)) || seen.some((x) => sameSong(x, e))) return false;
     if (library.cleanOnly() && e.explicit) return false; // a clean edit may exist, but plenty of other hits do too
+    if (altVersion(e.title)) return false; // sales charts list live takes and remixes; radio plays the record
     seen.push(e);
     return true;
   });
@@ -349,7 +351,7 @@ export async function discoverFromCatalog({ category = 'N', count = 10, guidance
       if (!artist) continue;
       const info = await mono.getArtist(artist.id);
       for (const [rank, t] of info.topTracks.slice(0, 6).entries()) {
-        if (have.has(`${t.artist}|${t.title}`.toLowerCase()) || t.duration < 110 || t.duration > 420 || /remix|live|acoustic|instrumental|sped up|slowed/i.test(t.title)) continue;
+        if (have.has(`${t.artist}|${t.title}`.toLowerCase()) || t.duration < 110 || t.duration > 420 || altVersion(t.title)) continue;
         const year = library.originalYear(t);
         if (prof.yearFrom && year && (year < prof.yearFrom || year > prof.yearTo)) continue;
         if (library.cleanOnly() && t.explicit) continue; // addTrack would look for a clean twin, but keep the pool clean
