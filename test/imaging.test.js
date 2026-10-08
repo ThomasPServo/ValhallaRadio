@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import './helpers.js';
 import { sine } from './helpers.js';
+import { store } from '../server/store.js';
 import { vetPiece, planMix, seasonContext, templatePieces } from '../server/ai/imagingWriter.js';
 import { retireOld } from '../server/audio/imagingCreator.js';
 import { renderTemplate, firstSyllable, FX_STYLES, readWav, writeWav } from '../server/audio/productionDsp.js';
@@ -38,6 +39,10 @@ test('imaging vetting: lengths, caps, duplicates and expiry', () => {
   assert.match(vet({ type: 'id', text: 'This is the one and only station you will ever need to hear. {name}.' }).why, /words/);
   assert.equal(vet({ type: 'sweeper', text: 'ALL the hits. {name}.' }).piece.text, 'All the hits. {name}.');
   assert.equal(vet({ type: 'sweeper', text: 'Only on {callSign}. KMXV rocks.' }).piece.text, 'Only on {callSign}. KMXV rocks.', 'call letters stay capitalised');
+  const lib = store.data.library;
+  store.data.library = [{ id: 'x', title: 'Need You Tonight', artist: 'INXS' }];
+  assert.equal(vet({ type: 'sweeper', text: 'Blondie. INXS. Tears For Fears. {name}.' }).piece.text, 'Blondie. INXS. Tears For Fears. {name}.', 'band names keep their capitals');
+  store.data.library = lib;
   assert.equal(vet({ type: 'sweeper', text: 'All the hits! {name}' }, { existing: ['All the hits. {name}.'] }).why, 'duplicate');
   assert.ok(vet({ type: 'id', text: '{callSign}, {market}. {name}.' }, { existing: ['{name}. {slogan}.'] }).ok, 'different placeholders are not duplicates');
   assert.equal(vet({ type: 'sweeper', text: 'Your Halloween soundtrack. {name}.', expires: '2026-11-01' }).piece.expires, '2026-11-01');

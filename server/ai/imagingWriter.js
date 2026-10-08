@@ -105,7 +105,9 @@ export function vetPiece(p, { station = store.station, existing = [], today = ''
   const plain = text.replace(/\{\w+\}/g, ' ');
   for (const [re, why] of BANNED) if (re.test(plain)) return { ok: false, why };
   // shouting caps read badly on TTS ("ALL" → "A L L"); keep the call sign's letters only
-  text = text.replace(/\b[A-Z]{3,}\b/g, (w) => (station.callSign && w === station.callSign.toUpperCase() ? w : w[0] + w.slice(1).toLowerCase()));
+  // (and band names that are written in capitals: INXS, ABBA, AC/DC)
+  const keep = new Set([station.callSign?.toUpperCase(), ...store.data.library.flatMap((t) => String(t.artist || '').match(/\b[A-Z]{3,}\b/g) || [])]);
+  text = text.replace(/\b[A-Z]{3,}\b/g, (w) => (keep.has(w) ? w : w[0] + w.slice(1).toLowerCase()));
   const words = text.replace(/\{\w+\}/g, 'X').split(/\s+/).filter(Boolean).length;
   const [lo, hi] = FORMATS[station.formatId]?.imagingWords?.[type] || WORDS[type]; // a joke takes a few more words
   if (words < lo || words > hi) return { ok: false, why: `${words} words (a ${type} is ${lo}-${hi})` };
