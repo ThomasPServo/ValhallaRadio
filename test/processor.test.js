@@ -209,3 +209,17 @@ test('FM Heavy: high frequencies are held to what pre-emphasis allows, nothing a
     for (const f of [100, 1000, 6000, 12000]) assert.ok(tone('fmheavy', f, { fm: { output } }).peak <= -0.99, `${output} ${f} Hz`);
   }
 });
+
+test('Big City FM: pre-gain, fast hard multiband, FM pre-emphasis, and still nothing over the ceiling', () => {
+  const p = resolveParams('bigcity');
+  assert.equal(p.inputGainDb, 8);
+  assert.equal(p.fm.enabled, true);
+  assert.deepEqual(p.multiband.bands.map((b) => [b.ratio, b.attackMs, b.releaseMs]), [[8, 20, 180], [8, 10, 120], [8, 5, 80], [8, 3, 60], [10, 2, 50]]);
+  for (const f of [60, 1000, 8000]) {
+    const proc = new BroadcastProcessor(FS, p);
+    const buf = stereoSine(2, f, 0.9);
+    proc.process(buf, buf.length / 2);
+    let peak = 0; for (let i = FS * 2; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i]));
+    assert.ok(20 * Math.log10(peak) <= -0.99, `${f} Hz peak ${(20 * Math.log10(peak)).toFixed(2)} dB`);
+  }
+});

@@ -88,6 +88,18 @@ export const PRESETS = {
     clipper: { driveDb: 4 }, limiter: { ceilingDb: -1, releaseMs: 40 }, outputGainDb: 0, loudness: -10, finalDriveDb: 5, // pre-emphasis caps how loud FM gets
     fm: { enabled: true, preemphasisUs: 75, output: 'flat' },
   },
+  bigcity: {
+    name: 'Big City FM (over-processed)', description: 'Pre-gain slammed into hard, fast multiband compression and a clipper on the edge, through 75 µs: the loudest-on-the-dial big-market sound.',
+    inputGainDb: 8, // pre-gain: everything hits the chain hot
+    agc: { targetDb: -14, maxGainDb: 18, speed: 2.5 },
+    stereo: { width: 1.3, bassMonoHz: 140 },
+    eq: { bassDb: 5, warmthDb: -2, presenceDb: 3.5, airDb: 4 },
+    // [threshold, ratio, attack ms, release ms]: low thresholds, high ratios, fast recovery (the pumping, in-your-face density)
+    multiband: { drive: 12, bands: [[-28, 8, 20, 180], [-29, 8, 10, 120], [-30, 8, 5, 80], [-31, 8, 3, 60], [-31, 10, 2, 50]] },
+    clipper: { driveDb: 6 }, limiter: { ceilingDb: -1, releaseMs: 25 }, outputGainDb: 2, loudness: -9, finalDriveDb: 7, // de-emphasis leaves peak room: use it
+    maxTrimDb: 8,
+    fm: { enabled: true, preemphasisUs: 75, output: 'flat' },
+  },
   gentle: {
     name: 'Classical / Jazz', description: 'Light touch that keeps natural dynamics.',
     agc: { targetDb: -22, maxGainDb: 6, speed: 0.5 },
@@ -131,7 +143,11 @@ export function resolveParams(presetId = 'streaming', overrides = {}) {
   Object.assign(merged.stereo, p.stereo);
   Object.assign(merged.eq, p.eq);
   merged.multiband.drive = p.multiband.drive;
-  p.multiband.bands.forEach(([thr, ratio], i) => { merged.multiband.bands[i].thresholdDb = thr; merged.multiband.bands[i].ratio = ratio; });
+  p.multiband.bands.forEach(([thr, ratio, att, rel], i) => {
+    Object.assign(merged.multiband.bands[i], { thresholdDb: thr, ratio }, att ? { attackMs: att } : {}, rel ? { releaseMs: rel } : {});
+  });
+  if (p.inputGainDb) merged.inputGainDb = p.inputGainDb;
+  if (p.maxTrimDb) merged.loudness.maxTrimDb = p.maxTrimDb;
   Object.assign(merged.clipper, p.clipper);
   Object.assign(merged.limiter, p.limiter);
   merged.outputGainDb = p.outputGainDb;

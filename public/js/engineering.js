@@ -6,7 +6,7 @@ import { drawSpectrum, drawGonio, drawHistory, drawPPM } from './widgets.js';
 
 const CTL = [
   ['loudness.targetLufs', 'Loudness target', -20, -8, 0.5, 'LUFS'],
-  ['inputGainDb', 'Input gain', -12, 12, 0.5, 'dB'],
+  ['inputGainDb', 'Input gain (pre-gain)', -12, 18, 0.5, 'dB'],
   ['agc.targetDb', 'AGC target', -28, -12, 0.5, 'dB'],
   ['agc.maxGainDb', 'AGC max gain', 0, 18, 0.5, 'dB'],
   ['agc.speed', 'AGC speed', 0.3, 3, 0.1, '×'],
@@ -16,8 +16,8 @@ const CTL = [
   ['eq.warmthDb', 'Warmth · 300 Hz', -6, 6, 0.5, 'dB'],
   ['eq.presenceDb', 'Presence · 3.2 kHz', -6, 6, 0.5, 'dB'],
   ['eq.airDb', 'Air · 11 kHz', -6, 8, 0.5, 'dB'],
-  ['multiband.drive', 'Multiband drive', 0, 10, 0.5, 'dB'],
-  ['clipper.driveDb', 'Clipper drive', 0, 6, 0.5, 'dB'],
+  ['multiband.drive', 'Multiband drive', 0, 16, 0.5, 'dB'],
+  ['clipper.driveDb', 'Clipper drive', 0, 10, 0.5, 'dB'],
   ['limiter.ceilingDb', 'Ceiling', -3, -0.1, 0.1, 'dBTP'],
   ['limiter.releaseMs', 'Limiter release', 20, 300, 5, 'ms'],
   ['outputGainDb', 'Output gain', -12, 6, 0.5, 'dB'],

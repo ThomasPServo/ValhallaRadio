@@ -228,6 +228,14 @@ Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, D
 - **Loudness:** AGC, an 8 dB-driven 5-band compressor and a hard-driven clipper. It holds about −10 LUFS flat. Pre-emphasis caps how loud FM can get, which is part of that sound.
 - **Any preset:** the Engineering page can switch FM pre-emphasis on for any preset, with 75 or 50 µs and flat or pre-emphasized output.
 
+**Big City FM (over-processed)** goes further, on purpose. It's the loudest-on-the-dial big-market sound:
+
+- **Pre-gain:** +8 dB of pre-gain into a fast AGC.
+- **Compression:** 12 dB of drive into the multiband at 8:1 to 10:1, with attacks of 2 to 20 ms and releases of 50 to 180 ms, so it pumps.
+- **Clipping and EQ:** 6 dB of clipper drive, a big low end and a bright top, all through 75 µs pre-emphasis.
+- **Result:** on "Take on Me" it measured −7.7 LUFS with a 0.5 LU loudness range and peaks only 6 dB above the average level (the Rock preset: 10.8 dB).
+- **Engineering page:** the input gain (pre-gain), multiband drive and clipper drive controls now go high enough to push any preset this far.
+
 ### Station-in-a-box
 
 - Format presets bring categories, hour clocks, a weekly grid, dayparts, two DJ personas, imaging, a music bed and the processing sound.
@@ -330,7 +338,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 179 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 180 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```
