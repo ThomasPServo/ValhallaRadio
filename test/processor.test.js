@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { BroadcastProcessor, resolveParams, LoudnessMeter, PRESETS } from '../server/audio/processor.js';
+import { BroadcastProcessor, resolveParams, LoudnessMeter, PRESETS, emphasis, invert } from '../server/audio/processor.js';
 
 const FS = 44100;
 
@@ -161,4 +161,51 @@ test('auto-trim follows the target, and the output trim is respected', () => {
   }
   assert.ok(loud.outMeter.integrated() - quiet.outMeter.integrated() > 3.5, `${quiet.outMeter.integrated().toFixed(1)} → ${loud.outMeter.integrated().toFixed(1)}`);
   assert.ok(Math.abs(trimmed.trimDb) < 3, `the loop does not fight the output trim (${trimmed.trimDb.toFixed(1)} dB)`);
+});
+
+const respDb = (c, f) => {
+  const w = (2 * Math.PI * f) / FS;
+  const n = Math.hypot(c.b0 + c.b1 * Math.cos(w), -c.b1 * Math.sin(w)); const d = Math.hypot(1 + c.a1 * Math.cos(w), -c.a1 * Math.sin(w));
+  return 20 * Math.log10(n / d);
+};
+
+test('FM pre-emphasis follows the 75 µs and 50 µs curves to 15 kHz, and de-emphasis undoes it exactly', () => {
+  for (const us of [75, 50]) {
+    const pre = emphasis(FS, us * 1e-6); const de = invert(pre);
+    for (const f of [500, 1000, 2122, 3183, 6000, 10000, 15000]) {
+      const analog = 10 * Math.log10(1 + (2 * Math.PI * f * us * 1e-6) ** 2);
+      assert.ok(Math.abs(respDb(pre, f) - analog) < 0.15, `${us} µs at ${f} Hz: ${respDb(pre, f).toFixed(2)} vs ${analog.toFixed(2)} dB`);
+      assert.ok(Math.abs(respDb(pre, f) + respDb(de, f)) < 0.001);
+    }
+  }
+});
+
+test('FM Heavy: high frequencies are held to what pre-emphasis allows, nothing above 15 kHz, peaks at the ceiling', () => {
+  const tone = (preset, f, over = {}) => {
+    const proc = new BroadcastProcessor(FS, resolveParams(preset, { loudness: { autoTrim: false }, agc: { enabled: false }, ...over }));
+    const buf = stereoSine(2, f, 0.7);
+    proc.process(buf, buf.length / 2);
+    let peak = 0; for (let i = FS * 2; i < buf.length; i++) peak = Math.max(peak, Math.abs(buf[i]));
+    return { rms: 20 * Math.log10(rms(buf, FS)), peak: 20 * Math.log10(peak) };
+  };
+  assert.equal(resolveParams('fmheavy').fm.enabled, true);
+  assert.equal(resolveParams('chr').fm.enabled, false);
+  // a loud 10 kHz tone is limited several dB harder than a 1 kHz tone (its pre-emphasis boost), unlike the plain chain
+  const fmTilt = tone('fmheavy', 1000).rms - tone('fmheavy', 10000).rms;
+  const plainTilt = tone('fmheavy', 1000, { fm: { enabled: false } }).rms - tone('fmheavy', 10000, { fm: { enabled: false } }).rms;
+  assert.ok(fmTilt - plainTilt > 6, `HF held down by pre-emphasis: ${fmTilt.toFixed(1)} vs ${plainTilt.toFixed(1)} dB`);
+  // 19 kHz, where the stereo pilot lives, is notched out
+  const at19k = (on) => {
+    const proc = new BroadcastProcessor(FS, resolveParams('fmheavy', { loudness: { autoTrim: false }, agc: { enabled: false }, fm: { enabled: on } }));
+    const buf = stereoSine(1, 19000, 0.05);
+    proc.process(buf, buf.length / 2);
+    let re = 0; let im = 0; let n = 0;
+    for (let i = FS / 2; i < buf.length / 2; i++) { re += buf[i * 2] * Math.cos((2 * Math.PI * 19000 * i) / FS); im += buf[i * 2] * Math.sin((2 * Math.PI * 19000 * i) / FS); n++; }
+    return 20 * Math.log10((2 * Math.hypot(re, im)) / n + 1e-12);
+  };
+  assert.ok(at19k(true) < at19k(false) - 60, `19 kHz: ${at19k(true).toFixed(0)} vs ${at19k(false).toFixed(0)} dB`);
+  // peaks stay at the ceiling, flat and pre-emphasized
+  for (const output of ['flat', 'preemphasized']) {
+    for (const f of [100, 1000, 6000, 12000]) assert.ok(tone('fmheavy', f, { fm: { output } }).peak <= -0.99, `${output} ${f} Hz`);
+  }
 });

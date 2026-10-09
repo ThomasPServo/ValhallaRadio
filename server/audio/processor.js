@@ -2,6 +2,10 @@
 //   input trim → subsonic/DC filter → phase rotator → wideband gated AGC → stereo width + bass mono
 //   → EQ (bass / warmth / presence / air) → 5-band phase-compensated LR4 multiband compressor
 //   → soft clipper → look-ahead peak limiter → output.
+// FM mode does what an FM station's processor does: the clipper and limiter work on the 75 µs (or 50 µs)
+// pre-emphasized signal, band-limited to 15 kHz, so high frequencies are held to what an FM transmitter can
+// carry. The output is either de-emphasized ("flat": the sound of an FM receiver, for streaming or an exciter
+// with its own pre-emphasis on) or left pre-emphasized (for an exciter with pre-emphasis off).
 // Metering: input/output peaks, BS.1770 loudness (momentary / short-term / integrated),
 // 4x-oversampled true peak, gain reduction for every stage, 1/3-octave spectrum,
 // stereo correlation and goniometer points.
@@ -75,6 +79,15 @@ export const PRESETS = {
     multiband: { drive: 5, bands: [[-22, 3], [-24, 4], [-25, 4], [-25, 3.5], [-26, 3]] },
     clipper: { driveDb: 1.5 }, limiter: { ceilingDb: -1, releaseMs: 70 }, outputGainDb: 0, loudness: -13, finalDriveDb: 2,
   },
+  fmheavy: {
+    name: 'FM Heavy (75 µs)', description: 'Loud, dense, wall-to-wall: the heavy FM sound, clipped and limited through 75 µs pre-emphasis at 15 kHz bandwidth.',
+    agc: { targetDb: -16, maxGainDb: 14, speed: 1.6 },
+    stereo: { width: 1.2, bassMonoHz: 130 },
+    eq: { bassDb: 3.5, warmthDb: -1.5, presenceDb: 2.5, airDb: 3 },
+    multiband: { drive: 8, bands: [[-24, 5], [-25, 4.5], [-26, 4.5], [-27, 4.5], [-27, 5]] },
+    clipper: { driveDb: 4 }, limiter: { ceilingDb: -1, releaseMs: 40 }, outputGainDb: 0, loudness: -10, finalDriveDb: 5, // pre-emphasis caps how loud FM gets
+    fm: { enabled: true, preemphasisUs: 75, output: 'flat' },
+  },
   gentle: {
     name: 'Classical / Jazz', description: 'Light touch that keeps natural dynamics.',
     agc: { targetDb: -22, maxGainDb: 6, speed: 0.5 },
@@ -108,6 +121,8 @@ export function resolveParams(presetId = 'streaming', overrides = {}) {
     limiter: { ceilingDb: -1, releaseMs: 80, lookaheadMs: 2.5 },
     // final drive into the clipper/limiter sets the loudness; auto-trim holds the target (BS.1770)
     loudness: { targetLufs: -14, autoTrim: true, maxTrimDb: 6 },
+    // FM mode: clip and limit through pre-emphasis (75 µs in the Americas, 50 µs elsewhere), 15 kHz bandwidth
+    fm: { enabled: false, preemphasisUs: 75, output: 'flat', lowpassHz: 15000 },
     finalDriveDb: 0,
     outputGainDb: 0,
   };
@@ -122,6 +137,7 @@ export function resolveParams(presetId = 'streaming', overrides = {}) {
   merged.outputGainDb = p.outputGainDb;
   merged.loudness.targetLufs = p.loudness ?? merged.loudness.targetLufs;
   merged.finalDriveDb = p.finalDriveDb ?? 0;
+  if (p.fm) Object.assign(merged.fm, p.fm);
   return deepMerge(merged, overrides || {});
 }
 
@@ -327,6 +343,18 @@ export class BroadcastProcessor {
     if (this.presetKey !== p.preset) { this.presetKey = p.preset; this.trimDb = 0; }
     this.updateDrive();
     this.mbDrive = dbToLin(p.multiband.drive || 0);
+    const fm = p.fm || {};
+    const fmKey = fm.enabled ? `${fm.preemphasisUs}|${fm.lowpassHz}` : '';
+    if (fmKey && fmKey !== this.fmKey) {
+      const pre = emphasis(fs, (fm.preemphasisUs || 75) * 1e-6, fm.lowpassHz || 15000);
+      this.preL = new FirstOrder(pre); this.preR = new FirstOrder(pre);
+      this.deL = new FirstOrder(invert(pre)); this.deR = new FirstOrder(invert(pre));
+      // 8th-order Butterworth at 15 kHz: FM's audio bandwidth (and room for the 19 kHz stereo pilot)
+      // plus a 19 kHz notch, as FM processors protect the stereo pilot
+      const lp = () => [...BUTTER8.map((qv) => new Biquad().lowpass(fs, fm.lowpassHz || 15000, qv)), notch(fs, 19000, 4), notch(fs, 19000, 4)];
+      this.fmLpL = lp(); this.fmLpR = lp();
+    }
+    this.fmKey = fmKey;
   }
 
   /** Gain into the clipper/limiter: clipper drive + calibrated final drive + loudness auto-trim. */
@@ -350,6 +378,7 @@ export class BroadcastProcessor {
     const width = p.stereo.width;
     const gonioStep = Math.max(1, Math.floor(frames / 96));
     const metering = this.metering;
+    const fmOn = !bypass && Boolean(p.fm?.enabled) && Boolean(this.fmKey);
     for (let i = 0; i < frames; i++) {
       let l = buf[i * 2]; let r = buf[i * 2 + 1];
       const al = Math.abs(l); const ar = Math.abs(r);
@@ -434,10 +463,12 @@ export class BroadcastProcessor {
         // final drive (smoothed, so auto-trim never zippers) into the clipper and limiter
         const d = (this.driveS += (this.drive - this.driveS) * 0.0005);
         l *= d; r *= d;
+        if (fmOn) { l = this.preL.process(l); r = this.preR.process(r); } // the clipper and limiter see what the transmitter sees
         if (p.clipper.enabled) {
           l = softClip(l, this.ceil * 1.05);
           r = softClip(r, this.ceil * 1.05);
         }
+        if (fmOn) for (let k = 0; k < 6; k++) { l = this.fmLpL[k].process(l); r = this.fmLpR[k].process(r); }
 
         // loudness auto-trim: every 100 ms nudge the drive toward the target (gated, slow)
         if (++this.trimN >= 4410) {
@@ -454,7 +485,9 @@ export class BroadcastProcessor {
 
       // look-ahead limiter (always on, also protects bypass)
       const o = this._limit(l, r);
-      l = o[0] * this.outGain; r = o[1] * this.outGain;
+      l = o[0]; r = o[1];
+      if (fmOn && p.fm.output !== 'preemphasized') { l = this.deL.process(l); r = this.deR.process(r); } // what a receiver plays
+      l *= this.outGain; r *= this.outGain;
       const c = this.ceil;
       if (l > c) l = c; else if (l < -c) l = -c;
       if (r > c) r = c; else if (r < -c) r = -c;
@@ -576,6 +609,47 @@ export class BroadcastProcessor {
     return this._loud;
   }
 }
+
+const BUTTER8 = [0.5098, 0.6013, 0.9000, 2.5629];
+
+function notch(fs, f, q) {
+  const w = (2 * Math.PI * f) / fs; const c = Math.cos(w); const a = Math.sin(w) / (2 * q);
+  return new Biquad().set(1, -2 * c, 1, 1 + a, -2 * c, 1 - a);
+}
+
+/** A first-order IIR section: y = b0·x + b1·x[n-1] − a1·y[n-1]. */
+class FirstOrder {
+  constructor({ b0, b1, a1 }) { this.b0 = b0; this.b1 = b1; this.a1 = a1; this.x1 = 0; this.y1 = 0; }
+  process(x) { const y = this.b0 * x + this.b1 * this.x1 - this.a1 * this.y1; this.x1 = x; this.y1 = y; return y; }
+}
+
+/**
+ * FM pre-emphasis 1 + sτ (a 6 dB/octave rise above 2122 Hz for 75 µs, 3183 Hz for 50 µs), digitized by the
+ * bilinear transform with the corner pre-warped and a high pole set so the boost at the top of the band
+ * (15 kHz) matches the analog curve exactly.
+ */
+export function emphasis(fs, tau, topHz = 15000) {
+  const K = 2 * fs;
+  const fc = 1 / (2 * Math.PI * tau);
+  const t1 = 1 / (K * Math.tan(Math.PI * fc / fs)); // pre-warped: the digital corner lands on fc
+  const design = (t2) => {
+    const n = 1 + t2 * K;
+    return { b0: (1 + t1 * K) / n, b1: (1 - t1 * K) / n, a1: (1 - t2 * K) / n };
+  };
+  const gainAt = (c, f) => {
+    const w = (2 * Math.PI * f) / fs;
+    const re = c.b0 + c.b1 * Math.cos(w); const im = -c.b1 * Math.sin(w);
+    const dr = 1 + c.a1 * Math.cos(w); const di = -c.a1 * Math.sin(w);
+    return Math.hypot(re, im) / Math.hypot(dr, di);
+  };
+  const want = Math.hypot(1, 2 * Math.PI * topHz * tau);
+  let lo = 0; let hi = tau; // more τ2 = less boost
+  for (let i = 0; i < 60; i++) { const mid = (lo + hi) / 2; if (gainAt(design(mid), topHz) > want) lo = mid; else hi = mid; }
+  return design((lo + hi) / 2);
+}
+
+/** The exact inverse of a first-order section (de-emphasis from pre-emphasis). */
+export function invert({ b0, b1, a1 }) { return { b0: 1 / b0, b1: a1 / b0, a1: b1 / b0 }; }
 
 function softClip(x, c) {
   const t = c * 0.82;

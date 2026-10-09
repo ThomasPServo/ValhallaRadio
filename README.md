@@ -220,6 +220,14 @@ A broadcast processor, metered to ITU-R BS.1770:
 
 Presets per format (Streaming −14 LUFS, CHR, AC, Rock, Hip-Hop/R&B, Country, Dance, Talk, Classical/Jazz) each set a loudness target. A calibrated final drive plus a slow, gated auto-trim holds that target, with peaks at −1 dBTP.
 
+**FM Heavy (75 µs)** is the loud, dense sound of a heavily processed FM station, built the way an FM station's processor works:
+
+- **Pre-emphasis:** the final clipper and limiter work on the 75 µs pre-emphasized signal, the FCC curve: +3 dB at 2.1 kHz rising to +17 dB at 15 kHz, matched to within 0.15 dB. Loud high frequencies are held to what an FM transmitter can carry. Choose 50 µs instead for stations outside the Americas.
+- **Bandwidth:** audio is band-limited to 15 kHz with an 8th-order low-pass, and a notch takes 19 kHz, where the stereo pilot lives, down by more than 60 dB.
+- **Output:** **flat** is de-emphasized, which sounds like an FM receiver; use it for the stream or for an exciter whose own pre-emphasis is on. **Pre-emphasized** is for an exciter with its pre-emphasis switched off. De-emphasis exactly undoes pre-emphasis, so only the limiting changes the sound.
+- **Loudness:** AGC, an 8 dB-driven 5-band compressor and a hard-driven clipper. It holds about −10 LUFS flat. Pre-emphasis caps how loud FM can get, which is part of that sound.
+- **Any preset:** the Engineering page can switch FM pre-emphasis on for any preset, with 75 or 50 µs and flat or pre-emphasized output.
+
 ### Station-in-a-box
 
 - Format presets bring categories, hour clocks, a weekly grid, dayparts, two DJ personas, imaging, a music bed and the processing sound.
@@ -322,7 +330,7 @@ Everything is set in the studio. Environment variables are optional:
 
 ```bash
 npm run dev     # restart on change
-npm test        # 177 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
+npm test        # 179 tests: AI providers, DSP and loudness, planner (property tests), engine, auto-bed, imaging, feeds, speech, rotation
 ```
 
 ```

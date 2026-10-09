@@ -41,10 +41,21 @@ function controls() {
   }).join('');
 }
 
+/** FM mode: clip and limit through pre-emphasis like an FM station, with the output flat or pre-emphasized. */
+function fmControls() {
+  const fm = state.B.processing.params.fm || {};
+  const opt = (v, cur, label) => `<option value="${v}" ${String(cur) === String(v) ? 'selected' : ''}>${label}</option>`;
+  return `<div class="row" style="margin-top:12px;gap:10px;flex-wrap:wrap">
+    <label class="small" style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="fmOn" ${fm.enabled ? 'checked' : ''}> <b>FM pre-emphasis</b></label>
+    <select id="fmUs" ${fm.enabled ? '' : 'disabled'}>${opt(75, fm.preemphasisUs, '75 µs (US, Americas, Korea)')}${opt(50, fm.preemphasisUs, '50 µs (Europe, elsewhere)')}</select>
+    <select id="fmOut" ${fm.enabled ? '' : 'disabled'}>${opt('flat', fm.output, 'Flat output: de-emphasized (streaming, or an exciter with pre-emphasis on)')}${opt('preemphasized', fm.output, 'Pre-emphasized output (an exciter with pre-emphasis off)')}</select>
+    <span class="small muted">Clipping and limiting through pre-emphasis, 15 kHz bandwidth, 19 kHz protected</span></div>`;
+}
+
 export function render() {
   const P = state.B.processing;
   return `
-  <div class="row"><div><h1>Engineering</h1><p class="sub">Broadcast chain: AGC → stereo → EQ → 5-band compressor → clipper → true-peak limiter, metered to ITU-R BS.1770.</p></div>
+  <div class="row"><div><h1>Engineering</h1><p class="sub">Broadcast chain: AGC → stereo → EQ → 5-band compressor → clipper → true-peak limiter (optionally through FM pre-emphasis), metered to ITU-R BS.1770.</p></div>
     <span class="spacer"></span>
     <button class="${P.overrides?.bypass ? 'onair' : ''}" data-action="bypass" id="bypassBtn">${P.overrides?.bypass ? 'BYPASSED' : 'Bypass'}</button></div>
   <div class="readouts" style="margin-bottom:14px">
@@ -72,6 +83,7 @@ export function render() {
   <div class="card" style="margin-top:14px">
     <div class="row" style="margin-bottom:10px"><h2 style="margin:0">Processing preset</h2><span class="spacer"></span><button data-action="resetPreset">Reset to preset</button></div>
     <div class="presets">${Object.entries(P.presets).map(([id, p]) => `<button class="preset ${P.preset === id ? 'on' : ''}" data-action="preset" data-id="${id}"><b>${esc(p.name)}</b><span>${esc(p.description)}</span></button>`).join('')}</div>
+    <div id="fmCtl">${fmControls()}</div>
     <div class="knobs" id="knobs" style="margin-top:14px">${controls()}</div>
     <p class="hint">Changes apply live to the air chain. Highlighted controls differ from the preset.</p>
   </div>
@@ -158,6 +170,12 @@ export function mount() {
     const c = CTL.find((x) => x[0] === k);
     $(`[data-v="${k}"]`).textContent = `${Number(e.target.value).toFixed(c[4] < 0.1 ? 2 : c[4] < 1 ? 1 : 0)} ${c[5]}`;
   });
+  $('#fmCtl').addEventListener('change', async () => {
+    const fm = { enabled: $('#fmOn').checked, preemphasisUs: Number($('#fmUs').value), output: $('#fmOut').value };
+    await apply({ preset: state.B.processing.preset, overrides: { ...structuredClone(state.B.processing.overrides || {}), fm } });
+    $('#fmCtl').innerHTML = fmControls();
+    toast(fm.enabled ? `FM pre-emphasis ${fm.preemphasisUs} µs, ${fm.output === 'flat' ? 'flat' : 'pre-emphasized'} output` : 'FM pre-emphasis off');
+  });
   knobs.addEventListener('change', async (e) => {
     const k = e.target.dataset.ctl; if (!k) return;
     const overrides = setPath(structuredClone(state.B.processing.overrides || {}), k, Number(e.target.value));
@@ -168,8 +186,8 @@ export function mount() {
 }
 
 export const actions = {
-  preset: async (b) => { await apply({ preset: b.dataset.id }); $$('.preset').forEach((x) => x.classList.toggle('on', x.dataset.id === b.dataset.id)); $('#knobs').innerHTML = controls(); toast(`Preset: ${state.B.processing.presets[b.dataset.id].name}`); },
-  resetPreset: async () => { await apply({ preset: state.B.processing.preset, overrides: {} }); $('#knobs').innerHTML = controls(); toast('Back to the preset'); },
+  preset: async (b) => { await apply({ preset: b.dataset.id }); $$('.preset').forEach((x) => x.classList.toggle('on', x.dataset.id === b.dataset.id)); $('#knobs').innerHTML = controls(); $('#fmCtl').innerHTML = fmControls(); toast(`Preset: ${state.B.processing.presets[b.dataset.id].name}`); },
+  resetPreset: async () => { await apply({ preset: state.B.processing.preset, overrides: {} }); $('#knobs').innerHTML = controls(); $('#fmCtl').innerHTML = fmControls(); toast('Back to the preset'); },
   bypass: async (b) => {
     const on = !state.B.processing.overrides?.bypass;
     if (on && !confirm('Bypass the processor? The air chain will run unprocessed (limiter still protects peaks).')) return;
